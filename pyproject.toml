@@ -1,0 +1,31 @@
+[project]
+name = "heteroknockoffpy"
+version = "0.1.0"
+description = "Knockoffs and importances for heterogeneous data with conditional residuals and random forests"
+readme = "README.md"
+authors = [
+    { name = "Evan Mason" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "tensorflow==2.16.2",
+    "polars >=1.32, <2",
+    "numpy>=1.26.0",
+    "knockpy",
+    "rpy2>=3.6.4",
+    "pandas>=2.0.0,<3",
+    "pyarrow>=23.0.0",
+    "scikit-learn",
+    "torch==2.2.2",
+]
+
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+
+[tool.uv.sources]
