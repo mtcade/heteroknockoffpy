@@ -8,7 +8,132 @@
 import polars as pl
 import numpy as np
 
-from typing import Literal
+from typing import Literal, Self
+from dataclasses import dataclass
+
+@dataclass
+class OutcomeDescriptor:
+    outcome_dimension: Literal['single','multi',]
+    outcome_type: Literal['continuous','count','categorical',]
+    
+    @classmethod
+    def infer(
+        cls,
+        y: np.ndarray | pl.DataFrame | pl.Series,
+        outcome_type: Literal['continuous','count','categorical',] | None
+        ) -> Self:
+        if outcome_type is None:
+            if isinstance( y, pl.Series ):
+                if y.dtype.is_float():
+                    return cls(
+                        outcome_dimension = 'single',
+                        outcome_type = 'continuous',
+                    )
+                #
+                elif y.dtype.is_integer():
+                    if not ( y >= 0 ).all():
+                        raise ValueError(
+                            "Require nonnegative y entries for integer values"
+                        )
+                    #
+                    return cls(
+                        outcome_dimension = 'single',
+                        outcome_type = 'count',
+                    )
+                #
+                elif y.dtype == pl.Categorical:
+                    return cls(
+                        outcome_dimension = 'single',
+                        outcome_type = 'categorical',
+                    )
+                #
+                else:
+                    raise TypeError(
+                        "Unrecognized y.dtype={}".format( y.dtype )
+                    )
+                #/switch y.dtype
+            elif isinstance( y, pl.DataFrame ):
+                # Check for homogeneity
+                if not len( set( y.dtypes ) ) == 1:
+                    raise ValueError(
+                        "Require same dtype for each y column; found y.dtypes={}".format(y.dtypes)
+                    )
+                #
+                dtype = y.dtypes[0]
+                if dtype.is_float():
+                    return cls.infer(
+                        y = y,
+                        outcome_type = 'continuous',
+                    )
+                #
+                elif dtype.is_integer():
+                    if not ( y >= 0 ).to_series().all():
+                        raise ValueError(
+                            "Require nonnegative y entries for integer values"
+                        )
+                    #/if not ( y >= 0 ).to_series().all()
+                    return cls.infer(
+                        y = y,
+                        outcome_type = 'count',
+                    )
+                #
+                elif dtype == pl.Categorical:
+                    return cls.infer(
+                        y = y,
+                        outcome_type = 'categorical',
+                    )
+                #
+                else:
+                    raise TypeError(
+                        "Unrecognized dtype={}".format( dtype )
+                    )
+                #/switch y.dtype
+            #
+            elif isinstance( y, np.ndarray ):
+                if np.issubdtype( y, np.float ):
+                    return cls.infer(
+                        y = y,
+                        outcome_type = 'continuous',
+                    )
+                elif np.issubdtype( y, np.integer ):
+                    if not np.all( y >= 0 ):
+                        raise ValueError(
+                            "Require nonnegative y entries for integer values"
+                        )
+                    #/if not np.all( y >= 0 )
+                    return cls.infer(
+                        y = y,
+                        outcome_type = 'count',
+                    )
+                else:
+                    raise TypeError(
+                        "Unrecognized y.dtype={}".format( y.dtype )
+                    )
+                #/switch np.issubdtype( y, ... )
+            #
+            else:
+                raise TypeError(
+                    "Unrecognized type(y)={}".format(type(y))
+                )
+            #/switch type(y)
+        #
+        else:
+            _width: int = y.shape[1] if len( y.shape ) > 1 else 1
+            if _width > 1:
+                return cls(
+                    outcome_dimension = 'multi',
+                    outcome_type = outcome_type,
+                )
+            #
+            else:
+                return cls(
+                    outcome_dimension = 'single',
+                    outcome_type = outcome_type,
+                )
+            #/if _width > 1
+        #/if outcome_type is None
+    #/def infer
+#/class OutcomeDescriptor
 
 def choices_from_weights(
     X: np.ndarray,

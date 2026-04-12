@@ -8,13 +8,14 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.func import vmap, jacrev
 
 import polars as pl
 import numpy as np
 import math
 
 from tqdm import tqdm
-from typing import Sequence, Self
+from typing import Sequence, Self, Type
 
 # -- KnockoffGAN networks
 
@@ -23,7 +24,7 @@ def _knockoff_xavier_init(layer: nn.Linear) -> None:
     std = 1.0 / math.sqrt(layer.in_features / 2.0)
     nn.init.normal_(layer.weight, mean=0.0, std=std)
     nn.init.zeros_(layer.bias)
-
+#
 
 def _build_sequential(
     input_size: int,
@@ -41,7 +42,7 @@ def _build_sequential(
     if output_activation is not None:
         parts.append(output_activation())
     return nn.Sequential(*parts)
-
+#
 
 class KnockoffGenerator(nn.Module):
     """
@@ -79,7 +80,6 @@ class KnockoffGenerator(nn.Module):
     #/def forward
 #/class KnockoffGenerator
 
-
 class KnockoffDiscriminator(nn.Module):
     """
     Discriminator D(SwapA, SwapB, Hint) → probabilities per feature.
@@ -114,7 +114,6 @@ class KnockoffDiscriminator(nn.Module):
         return self.net(torch.cat([swap_a, swap_b, hint], dim=1))
     #/def forward
 #/class KnockoffDiscriminator
-
 
 class KnockoffWGANDiscriminator(nn.Module):
     """
@@ -196,12 +195,45 @@ class KnockoffMINE(nn.Module):
 
 # -- Torch Importance
 
+def get_logit_jacobian(
+    model: nn.Module,
+    x: torch.Tensor,
+    ) -> torch.Tensor:
+    """
+    Computes the (n, k, p) Jacobian for a batched input.
+
+        :param model: A PyTorch nn.Module (classifier).
+        :param x: Input tensor of shape (n, p).
+        
+        :returns: A tensor of shape (n, k, p) where k is the number of logits.
+    """
+    # 1. Put model in eval mode to disable dropout/batchnorm updates
+    model.eval()
+
+    # 2. Define a pure function for a single sample (removes batch dim)
+    # torch.func requires functional calls, so we use torch.func.functional_call
+    # or a simple wrapper if the model doesn't use complex state.
+    def model_single(x_single):
+        # We add a dummy batch dim [1, p] because most layers expect it,
+        # then squeeze it back out to return [k]
+        return model(x_single.unsqueeze(0)).squeeze(0)
+
+    # 3. Use jacrev for the derivative and vmap to parallelize over the batch
+    # jacrev(model_single) computes (k, p)
+    # vmap(...) pushes the batch dimension 'n' to the front
+    with torch.no_grad():
+        jacobian_batch = vmap(jacrev(model_single))(x)
+    #
+    return jacobian_batch
+#/def get_logit_jacobian
+
 class TorchSimpleDense_Numeric( nn.Module ):
     def __init__(
         self: Self,
         input_size: int,
         layers: Sequence[ int ],
         internalModule: nn.Module, # nn.ReLU, ...
+        output_dimension: int = 1
         ) -> None:
         super().__init__()
         
@@ -227,7 +259,7 @@ class TorchSimpleDense_Numeric( nn.Module ):
         # Final to output
         sequential_list.append(
             nn.Linear(
-                layers[-1], 1,
+                layers[-1], output_dimension,
             )
         )
         
@@ -258,7 +290,9 @@ class PredictionModel_Numeric():
         self: Self,
         input_size: int,
         layers: Sequence[ int ],
-        dense_activation: str | nn.Module = nn.ReLU,
+        dense_activation: str | Type[ nn.Module ] = nn.ReLU,
+        loss_func: nn.Module = nn.MSELoss(),
+        output_dimension: int = 1,
         learning_rate: float = 0.01,
         epochs: int = 500,
         verbose: int = 0
@@ -278,8 +312,11 @@ class PredictionModel_Numeric():
             input_size = input_size,
             layers = layers,
             internalModule = internalModule,
+            output_dimension = output_dimension,
         ).to( self.device )
         
+        self.loss_func = loss_func
+        self.output_dimension = output_dimension
         self.learning_rate = learning_rate
         self.epochs = epochs
         self.verbose = verbose
@@ -293,19 +330,25 @@ class PredictionModel_Numeric():
         y: np.ndarray,
         **kwargs,
         ) -> None:
-        loss_func: nn.MSELoss = nn.MSELoss()
         
         optimizer: optim.Adam = optim.Adam(
             self.model.parameters(),
             lr = self.learning_rate,
         )
         
-        X_tensor: torch.Tensor = torch.tensor( X ).float().to( self.device )
-        y_tensor: torch.Tensor = torch.tensor( y ).float().to( self.device )
+        loss_func: nn.Module = self.loss_func
         
+        X_tensor: torch.Tensor = torch.tensor( X ).float().to( self.device )
+        _y = np.asarray( y )
+        if np.issubdtype( _y.dtype, np.integer ):
+            y_tensor: torch.Tensor = torch.tensor( _y ).long().to( self.device )
+        else:
+            y_tensor: torch.Tensor = torch.tensor( _y ).float().to( self.device )
+        #
+
         for epoch in tqdm( range( self.epochs ) ):
             y_pred = self.model( X_tensor )
-            
+
             loss = loss_func( y_pred.squeeze(1), y_tensor )
             
             optimizer.zero_grad()
@@ -320,9 +363,11 @@ class PredictionModel_Numeric():
         self: Self,
         X: np.ndarray,
         ) -> np.ndarray:
-        return self.model(
+        y_hat: np.ndarray = self.model(
             torch.tensor( X ).float().to( self.device )
-        ).detach().numpy().reshape( (X.shape[0],) )
+        ).detach().numpy()
+        
+        return y_hat
     #/def predict
     
     def auto_diff(
@@ -346,3 +391,16 @@ class PredictionModel_Numeric():
     #/def auto_diff
 #class PredictionModel_Numeric():
 
+class PredictionModel_Categorical():
+    def __init__(
+        self: Self,
+        input_size: int,
+        layers: Sequence[ int ],
+        dense_activation: str | nn.Module = nn.ReLU,
+        learning_rate: float = 0.01,
+        epochs: int = 500,
+        verbose: int = 0
+        ) -> None:
+        ...
+    #/def __init__
+#/class PredictionModel_Categorical

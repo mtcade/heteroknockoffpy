@@ -15,7 +15,8 @@ dependencies = [
     "rpy2>=3.6.4",
     "pandas>=2.0.0,<3",
     "pyarrow>=23.0.0",
-    "scikit-learn",
+    "scikit-learn>=1.08",
+    "statsmodels",
     "torch==2.2.2",
 ]
 

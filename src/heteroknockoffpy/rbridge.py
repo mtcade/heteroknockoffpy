@@ -6,6 +6,7 @@
 #//
 
 from . import utilities
+from .utilities import OutcomeDescriptor
 
 import os
 os.environ["RPY2_CFFI_MODE"] = "ABI"
@@ -20,8 +21,37 @@ import rpy2.robjects.packages as rpackages
 from rpy2.robjects.vectors import StrVector
 from rpy2.robjects import NULL as rNULL
 from rpy2.robjects import conversion
+from rpy2.rinterface_lib import callbacks as _r_cb
 
+import contextlib
+import sys
 from typing import Literal
+
+@contextlib.contextmanager
+def _r_warnings_to_stdout():
+    """
+    Context manager: redirect R warnings and messages to stdout, printed immediately.
+
+    Two things happen on entry:
+    1. rpy2's consolewrite_warnerror callback is replaced with a stdout writer
+       so that warning/message text reaches the terminal.
+    2. R's warn option is set to 1 (immediate), overriding the default 0
+       (buffered).  With warn=0, R accumulates warnings silently and only
+       prints "There were N warnings" at the end of a top-level expression,
+       making individual messages invisible.  warn=1 prints each warning as
+       it is raised, which is what we want for diagnostics.
+
+    Both are restored on exit.
+    """
+    _orig_cb = _r_cb.consolewrite_warnerror
+    _orig_warn: int = int( ro.r( 'getOption("warn")' )[0] )
+    _r_cb.consolewrite_warnerror = lambda s: (sys.stdout.write(s), sys.stdout.flush())
+    ro.r( 'options(warn=1)' )
+    try:
+        yield
+    finally:
+        _r_cb.consolewrite_warnerror = _orig_cb
+        ro.r( f'options(warn={_orig_warn})' )
 
 if not rpackages.isinstalled('knockoff'):
     rutils = rpackages.importr('utils')
@@ -44,160 +74,6 @@ rRanger = rpackages.importr('ranger')
 
 rStats = rpackages.importr('stats')
 
-# -- Category Choosing
-
-def get_forest_expectations_for_column(
-    X: pl.DataFrame,
-    col: str,
-    verbose: int = 0,
-    verbose_prefix: str = '',
-    **kwargs,
-    ) -> np.ndarray:
-    """
-        Using r ranger, calculate conditional expectations for a variable as a function of all others.
-        
-        :param kwargs: passed to r ranger::ranger
-        :returns: Numpy array of size (n,)
-    """
-    assert X.schema[col] != pl.Categorical
-    
-    with (
-        ro.default_converter\
-            + pandas2ri.converter
-        #/
-    ).context():
-        ro.globalenv['X.df'] = X.to_pandas()
-        ro.globalenv['X.df.explanatory'] = X.drop(
-            (col,)
-        ).to_pandas()
-    #
-    
-    ro.globalenv['.forest'] = rRanger.ranger(
-        data = ro.globalenv['X.df'],
-        dependent_variable_name = col,
-        probability = False,
-        respect_unordered_factors = True,
-        oob_error = False,
-        **kwargs,
-    )
-    
-    ro.globalenv['.predictions'] = rStats.predict(
-        ro.globalenv['.forest'],
-        data = ro.globalenv['X.df.explanatory'],
-        type = 'response',
-    )
-    
-    # Set ro.globalenv['.preidctions.expectation']
-    ro.r(
-    """
-.predictions.expectation <- .predictions$predictions
-    """
-    )
-    
-    expectation_predictions: np.ndarray
-    with (
-        ro.default_converter\
-            + numpy2ri.converter
-        #/
-    ).context():
-        expectation_predictions = ro.globalenv['.predictions.expectation']
-    #/with (ro.default_converter + ... )
-    
-    return expectation_predictions
-#/def get_forest_expectations_for_column
-
-def get_forest_probabilities_for_column(
-    X: pl.DataFrame,
-    col: str,
-    logit: bool = False,
-    verbose: int = 0,
-    verbose_prefix: str = '',
-    **kwargs
-    ) -> np.ndarray:
-    """
-        Using r ranger, calculate the probabilities for the categorical column `col` from `X` as a function of every other column.
-        
-        :param kwargs: Passed to r ranger::ranger
-        :returns: Numpy array of size (n, k) where k is the number of categories in `X[col]`. If you want to drop first, do it elsewhere
-    """
-    assert X.schema[col] == pl.Categorical
-    
-    with (
-        ro.default_converter\
-            + pandas2ri.converter
-        #/
-    ).context():
-        ro.globalenv['X.df'] = X.to_pandas()
-        ro.globalenv['X.df.explanatory'] = X.drop(
-            (col,)
-        ).to_pandas()
-    #
-
-    ro.globalenv['.forest'] = rRanger.ranger(
-        data = ro.globalenv['X.df'],
-        dependent_variable_name = col,
-        probability = True,
-        respect_unordered_factors = True,
-        oob_error = False,
-        **kwargs,
-    )
-    
-    ro.globalenv['.predictions'] = rStats.predict(
-        ro.globalenv['.forest'],
-        data = ro.globalenv['X.df.explanatory'],
-        type = 'response',
-    )
-    
-    # Set ro.globalenv['.preidctions.proba']
-    ro.r(
-    """
-.predictions.proba <- .predictions$predictions
-    """
-    )
-
-    proba_predictions: np.ndarray
-    with (
-        ro.default_converter\
-            + numpy2ri.converter
-        #/
-    ).context():
-        proba_predictions = ro.globalenv['.predictions.proba']
-    #/with (ro.default_converter + ... )
-    
-    if logit:
-        # Replace zero with smallest nonzero values
-        #   per column
-        # Soft maxing makes this work safely
-        zeroMask: np.ndarray = (proba_predictions == 0.0)
-        if np.any( zeroMask ):
-            predictions_infMask: np.ndarray = np.where(
-                zeroMask,
-                np.inf,
-                proba_predictions
-            )
-            
-            # Smallest nonzeroes
-            proba_min = np.min(predictions_infMask, axis=0)
-            
-            # Replace zeroes with smallest nonzeroes
-            proba_predictions = np.where(
-                zeroMask,
-                proba_min,
-                proba_predictions
-            )
-            
-            # Take soft maxes
-            proba_predictions = proba_predictions / np.sum(
-                proba_predictions, axis = 1
-            )[:,np.newaxis]
-        #
-        
-        proba_predictions = np.log( proba_predictions )
-    #/if logit
-    
-    return proba_predictions
-#/def get_forest_probabilities_for_column
-
 def get_ohe_forest_probabilities_np(
     X: pl.DataFrame,
     logit: bool = True,
@@ -207,22 +83,59 @@ def get_ohe_forest_probabilities_np(
     **kwargs,
     ) -> np.ndarray:
     """
-        Use r ranger to get probabilities, or log probabilities if logit is selected. If we have `logit` and `drop_first`, subtract the first column
+        Use r ranger to get probabilities, or log probabilities if logit is selected. If we have `logit` and `drop_first`, subtract the first column.
+
+        The column loop runs entirely in R (forest.ohe_probabilities), loaded once
+        per call via rpy2.robjects.packages.STAP.
     """
-    columns_dict: dict[
-        str, # categorical column in X
-        np.ndarray # probabilities, perhaps with drop_first
-    ] = {
-        col: get_forest_probabilities_for_column(
-            X = X,
-            col = col,
-            logit = logit,
-            **kwargs
-        ) for col, dtype in X.schema.items()\
-            if dtype == pl.Categorical
-        #/
-    }
-    
+    # -- Load R script via STAP
+    _script_path: str = os.path.normpath(
+        os.path.join(
+            os.path.dirname( os.path.abspath( __file__ ) ),
+            '..', '..', 'scripts',
+            'forest.ohe_probabilities.R',
+        )
+    )
+    with open( _script_path ) as _f:
+        _r_code: str = _f.read()
+    _ohe_probs = rpackages.STAP( _r_code, "ohe_probs" )
+
+    # -- Convert X to R data.frame
+    with (
+        ro.default_converter + pandas2ri.converter
+    ).context():
+        X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+
+    # -- Single R call: returns named list of n×k probability matrices
+    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+        result_r = _ohe_probs.forest_ohe_probabilities(
+            X_r,
+            **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+        )
+
+    # -- Extract probability matrices per categorical column
+    columns_dict: dict[ str, np.ndarray ] = {}
+    for col in list( result_r.names ):
+        _r_vec = result_r.rx2( col )
+        with (
+            ro.default_converter + numpy2ri.converter
+        ).context():
+            columns_dict[col] = np.asarray( _r_vec )
+
+    # -- Apply logit transform (with zero-handling) if requested
+    if logit:
+        for col in columns_dict:
+            proba: np.ndarray = columns_dict[col]
+            zeroMask: np.ndarray = (proba == 0.0)
+            if np.any( zeroMask ):
+                predictions_infMask: np.ndarray = np.where(
+                    zeroMask, np.inf, proba
+                )
+                proba_min = np.min( predictions_infMask, axis = 0 )
+                proba = np.where( zeroMask, proba_min, proba )
+                proba = proba / np.sum( proba, axis = 1 )[:,np.newaxis]
+            columns_dict[col] = np.log( proba )
+
     if drop_first:
         if logit:
             # Subtract first column and drop it
@@ -230,16 +143,15 @@ def get_ohe_forest_probabilities_np(
                 col: val[:,1:] - val[:,0:1]\
                     for col, val in columns_dict.items()
             }
-        #
         else:
             # Just drop first
             columns_dict = {
                 col: val[:,1:]\
                     for col, val in columns_dict.items()
             }
-        #/if drop_first/else
-    #/if drop_first/else
-    
+        #/if logit/else
+    #/if drop_first
+
     X_ohe_probabilities_np: np.ndarray = np.concatenate(
         tuple(
             columns_dict[col] if dtype == pl.Categorical\
@@ -249,10 +161,10 @@ def get_ohe_forest_probabilities_np(
         ),
         axis = 1,
     )
-    
+
     assert X_ohe_probabilities_np.shape[0] == X.shape[0]
     assert X_ohe_probabilities_np.shape[1] >= X.shape[1]
-    
+
     return X_ohe_probabilities_np
 #/def get_ohe_forest_probabilities_np
 
@@ -263,67 +175,50 @@ def get_forest_conditional_expectations(
     **kwargs
     ) -> pl.DataFrame:
     """
-        Uses r ranger::ranger for a series of forests to get conditional expectations for each numeric `X`
-        
+        Uses r ranger::ranger to get conditional expectations for each numeric column of X.
+
+        The column loop runs entirely in R (forest.conditional_expectations), loaded once
+        per call via rpy2.robjects.packages.STAP.
+
         :param kwargs: Passed to r ranger::ranger
-        :returns: Data Frame, with non categorical columns of X, with conditional expectations
+        :returns: DataFrame with non-categorical columns of X replaced by their conditional expectations
     """
-    with (
-        ro.default_converter\
-            + pandas2ri.converter
-        #/
-    ).context():
-        ro.globalenv['X.df'] = X.to_pandas()
+    # -- Load R script via STAP
+    _script_path: str = os.path.normpath(
+        os.path.join(
+            os.path.dirname( os.path.abspath( __file__ ) ),
+            '..', '..', 'scripts',
+            'forest.conditional_expectations.R',
+        )
+    )
+    with open( _script_path ) as _f:
+        _r_code: str = _f.read()
     #
-    
-    # Build dictionary of col -> expectation
+    _cond_exp = rpackages.STAP( _r_code, "cond_exp" )
+
+    # -- Convert X to R data.frame
+    with (
+        ro.default_converter + pandas2ri.converter
+    ).context():
+        X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+
+    # -- Single R call: returns named list of per-column expectation vectors
+    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+        result_r = _cond_exp.forest_conditional_expectations(
+            X_r,
+            **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+        )
+
+    # -- Extract expectation vectors per numeric column
     conditional_expectations_dict: dict[ str, np.ndarray ] = {}
-    for col, dtype in X.schema.items():
-        if dtype == pl.Categorical:
-            continue
-        #
+    for col in list( result_r.names ):
+        _r_vec = result_r.rx2( col )
         with (
-            ro.default_converter\
-                + pandas2ri.converter
-            #/
+            ro.default_converter + numpy2ri.converter
         ).context():
-            ro.globalenv['X.df.explanatory'] = X.drop(
-                (col,)
-            ).to_pandas()
-        #
-        
-        ro.globalenv['.forest'] = rRanger.ranger(
-            data = ro.globalenv['X.df'],
-            dependent_variable_name = col,
-            probability = False,
-            respect_unordered_factors = True,
-            oob_error = False,
-            **kwargs,
-        )
-        
-        ro.globalenv['.predictions'] = rStats.predict(
-            ro.globalenv['.forest'],
-            data = ro.globalenv['X.df.explanatory'],
-            type = 'response',
-        )
-        
-        # Set ro.globalenv['.preidctions.proba']
-        ro.r(
-        """
-.predictions.expectation <- .predictions$predictions
-        """
-        )
-        
-        # Put the numpy array in the dictionary
-        with (
-            ro.default_converter\
-                + numpy2ri.converter
-            #/
-        ).context():
-            conditional_expectations_dict[col] = ro.globalenv['.predictions.expectation']
-        #/with (ro.default_converter + ... )
-    #/for col, dtype in X.schema.items()
-    
+            conditional_expectations_dict[col] = np.asarray( _r_vec )
+        #/with (ro.default_converter + numpy2ri.converter)
+
     return pl.DataFrame(
         conditional_expectations_dict,
         schema = {
@@ -345,69 +240,65 @@ def get_knockoffs_with_Xk_numeric(
     **kwargs,
     ) -> pl.DataFrame:
     """
-        Implements the categorical SCIP method
-        
+        Categorical-only SCIP: numeric knockoffs are pre-provided; only
+        categorical knockoffs are generated here, sequentially.
+
+        The column loop runs entirely in R (scip.knockoffs.R), loaded once
+        per call via rpy2.robjects.packages.STAP.
+
         :param kwargs: Passed to r ranger::ranger
     """
     numeric_columns: tuple[ str,... ] = tuple(
         col for col, dtype in X.schema.items() if dtype != pl.Categorical
     )
-    
-    assert len(numeric_columns) == Xk_numeric.shape[1]
-    
-    # Get knockoffs so far, just the numeric ones
-    scip_df: pl.DataFrame = pl.concat(
-        (
-            X, pl.DataFrame(
-                {
-                    "{}~".format(numeric_columns[j]): Xk_numeric[:,j]\
-                        for j in range( Xk_numeric.shape[1] )
-                    #/
-                },
-                schema = {
-                    "{}~".format(col): X.schema[col] for col in numeric_columns
-                },
-            )
-        ),
-        how = 'horizontal',
+    assert len( numeric_columns ) == Xk_numeric.shape[1]
+
+    # -- Load R script via STAP
+    _script_path: str = os.path.normpath(
+        os.path.join(
+            os.path.dirname( os.path.abspath( __file__ ) ),
+            '..', '..', 'scripts',
+            'scip.knockoffs.R',
+        )
     )
-    
-    # Add in the categorical columns by calculating predictions
-    probabilities: np.ndarray
-    for col in X.columns:
-        if X.schema[col] != pl.Categorical:
-            continue
-        #
-        
-        # Note the categorical variable is already in as `col`
-        probabilities = get_forest_probabilities_for_column(
-            X = scip_df,
-            col = col,
-            verbose = verbose,
-            verbose_prefix = verbose_prefix,
-            **kwargs,
+    with open( _script_path ) as _f:
+        _r_code: str = _f.read()
+    _scip = rpackages.STAP( _r_code, "scip" )
+
+    # -- Draw one integer seed from Python's Generator to seed R's RNG
+    _seed: int = int( rng.integers( 1, 2**31 - 1 ) )
+
+    # -- Convert X to R data.frame (pandas2ri handles pl.Categorical -> R factor)
+    with (
+        ro.default_converter + pandas2ri.converter
+    ).context():
+        X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+
+    # -- Convert Xk_numeric to R matrix (positional, no column names needed)
+    with (
+        ro.default_converter + numpy2ri.converter
+    ).context():
+        Xk_numeric_r = ro.conversion.get_conversion().py2rpy(
+            Xk_numeric.astype( np.float64 )
         )
-        
-        # Choose categories
-        scip_df = scip_df.with_columns(
-            utilities.makeChoices_ohe(
-                X = probabilities,
-                categories = X[col].cat.get_categories().sort(),
-                name = "{}~".format(col),
-                method = 'softmax',
-                drop_first = False,
-                rng = rng,
-            )
+
+    # -- Single R call: returns n x p data.frame of knockoffs
+    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+        Xk_r = _scip.scip_knockoffs_with_numeric(
+            X           = X_r,
+            Xk_numeric  = Xk_numeric_r,
+            seed        = _seed,
+            **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
         )
-    #/for col in X.columns
-    
-    # Now we have all the choices made; extract only the knockoffs
-    return scip_df.select(
-        **{
-            col: pl.col("{}~".format(col))\
-                for col in X.columns
-            #/
-        }
+
+    # -- Convert R data.frame back to polars via pandas; pin dtypes to X.schema
+    with (
+        ro.default_converter + pandas2ri.converter
+    ).context():
+        Xk_pd: pd.DataFrame = ro.conversion.get_conversion().rpy2py( Xk_r )
+
+    return pl.from_pandas( Xk_pd ).cast(
+        { col: dtype for col, dtype in X.schema.items() }
     )
 #/def get_knockoffs_with_Xk_numeric
 
@@ -446,96 +337,59 @@ def get_knockoffs_SCIP(
     **kwargs,
     ) -> pl.DataFrame:
     """
-        :param method: How do deal with numeric residuals
+        Full sequential SCIP knockoff generation (numeric + categorical).
+
+        Each column's knockoff conditions on all original columns plus all
+        previously generated knockoffs. The entire column loop runs in R
+        (scip.knockoffs.R), loaded once per call via rpy2.robjects.packages.STAP.
+
+        :param residuals_method: "normal" or "permute" — how to resample numeric residuals
         :param kwargs: Passed to r ranger::ranger
     """
-    
-    n: int = X.shape[0]
-    
-    scip_df: pl.DataFrame = X
+    # -- Load R script via STAP
+    _script_path: str = os.path.normpath(
+        os.path.join(
+            os.path.dirname( os.path.abspath( __file__ ) ),
+            '..', '..', 'scripts',
+            'scip.knockoffs.R',
+        )
+    )
+    with open( _script_path ) as _f:
+        _r_code: str = _f.read()
+    _scip = rpackages.STAP( _r_code, "scip" )
 
-    probabilities: np.ndarray
-    conditional_expectations: np.ndarray
-    conditional_residuals: np.ndarray
-    numeric_knockoffs: np.ndarray
-    
-    for col in X.columns:
-        if X.schema[col] == pl.Categorical:
-            probabilities = get_forest_probabilities_for_column(
-                X = scip_df,
-                col = col,
-                verbose = verbose,
-                verbose_prefix = verbose_prefix,
-                **kwargs,
-            )
-            
-            # Choose categories
-            scip_df = scip_df.with_columns(
-                utilities.makeChoices_ohe(
-                    X = probabilities,
-                    categories = X[col].cat.get_categories().sort(),
-                    name = "{}~".format(col),
-                    method = 'softmax',
-                    drop_first = False,
-                    rng = rng,
-                )
-            )
-        #
-        else:
-            # Numeric
-            conditional_expectations = get_forest_expectations_for_column(
-                X = scip_df,
-                col = col,
-                verbose = verbose,
-                verbose_prefix = verbose_prefix,
-                **kwargs,
-            )
-            conditional_residuals = X[col] - conditional_expectations
-            
-            if residuals_method == 'normal':
-                numeric_knockoffs = conditional_expectations + rng.normal(
-                    loc = 0.0,
-                    scale = np.std(
-                        conditional_residuals,
-                        ddof = 1,
-                    ),
-                    size = n,
-                )
-            #
-            elif residuals_method == 'permute':
-                numeric_knockoffs = conditional_expectations\
-                    + rng.permutation(
-                        conditional_residuals
-                    )
-                #/
-            #
-            else:
-                raise ValueError("Unreocgnized method={}".format(method))
-            #
-            
-            scip_df = scip_df.with_columns(
-                pl.Series(
-                    name = "{}~".format(col),
-                    values = numeric_knockoffs,
-                    dtype = X.schema[col],
-                )
-            )
-        #/switch X.schema[col]
-    #/for col in X.columns
-    
-    # Select knockoffs as original column names
-    return scip_df.select(
-        **{
-            col: pl.col("{}~".format(col))\
-                for col in X.columns
-            #/
-        }
+    # -- Draw one integer seed from Python's Generator to seed R's RNG
+    _seed: int = int( rng.integers( 1, 2**31 - 1 ) )
+
+    # -- Convert X to R data.frame (pandas2ri handles pl.Categorical -> R factor)
+    with (
+        ro.default_converter + pandas2ri.converter
+    ).context():
+        X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+
+    # -- Single R call: returns n x p data.frame of knockoffs
+    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+        Xk_r = _scip.scip_knockoffs(
+            X                = X_r,
+            residuals_method = residuals_method,
+            seed             = _seed,
+            **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+        )
+
+    # -- Convert R data.frame back to polars via pandas; pin dtypes to X.schema
+    with (
+        ro.default_converter + pandas2ri.converter
+    ).context():
+        Xk_pd: pd.DataFrame = ro.conversion.get_conversion().rpy2py( Xk_r )
+
+    return pl.from_pandas( Xk_pd ).cast(
+        { col: dtype for col, dtype in X.schema.items() }
     )
 #/def get_knockoffs_SCIP
 
 # -- Importances
 
-def rangerMaldImportances(
+def rangerMaldImportances_continuous(
     X: pl.DataFrame,
     Xk: pl.DataFrame,
     y: pl.Series | pl.DataFrame,
@@ -546,174 +400,291 @@ def rangerMaldImportances(
     **kwargs,
     ) -> np.ndarray:
     """
-        :param kwargs: Passed to r ranger::ranger
+        Continuous-outcome MALD importance via a ranger regression forest.
+
+        The column loop runs entirely in R (stat.forest.mald_continuous), loaded
+        once per call via rpy2.robjects.packages.STAP.
     """
-    # FUTURE: categorical outcome
     assert X.schema == Xk.schema
     X_all: pl.DataFrame = pl.concat(
         [
             X,
-            Xk.rename({col: "{}~".format(col) for col in X.columns})
+            Xk.rename( {col: "{}~".format(col) for col in X.columns} )
         ],
         how = 'horizontal',
     )
-    
-    probability = False
+
+    # -- Load R script via STAP
+    _script_path: str = os.path.normpath(
+        os.path.join(
+            os.path.dirname( os.path.abspath( __file__ ) ),
+            '..', '..', 'scripts',
+            'stat.forest.mald_continuous.R',
+        )
+    )
+    with open( _script_path ) as _f:
+        _r_code: str = _f.read()
+    _mald_continuous = rpackages.STAP( _r_code, "mald_continuous" )
+
+    # -- Convert X_all to R data.frame
+    X_all_r: ro.DataFrame
     with (
-        ro.default_converter\
-            + pandas2ri.converter\
-            + numpy2ri.converter
-        #/
+        ro.default_converter + pandas2ri.converter
     ).context():
-        ro.globalenv['X.df'] = X_all.to_pandas()
-        ro.globalenv['y'] = y.to_numpy()
-        
-        #print(ro.globalenv['y'])
-        #print(ro.globalenv['y'].shape)
-        
-    #/with( ro.default_converter + ... )
-    
-    ro.globalenv['.forest'] = rRanger.ranger(
-        x = ro.globalenv['X.df'],
-        y = ro.globalenv['y'],
-        probability = probability,
-        respect_unordered_factors = True,
-        oob_error = False,
-        **kwargs,
-    )
-    
-    # Get original predictions
-    ro.globalenv['.predictions.base'] = rStats.predict(
-        ro.globalenv['.forest'],
-        data = ro.globalenv['X.df'],
-        type = 'response',
-    )
-    
-    ro.r(
+        X_all_r = ro.conversion.get_conversion().py2rpy( X_all.to_pandas() )
+
+    # -- Convert y to a numeric R vector
+    _y_series: pl.Series = y.to_series() if isinstance( y, pl.DataFrame ) else y
+    _y_np: np.ndarray = _y_series.to_numpy().astype( np.float64 )
+    with (
+        ro.default_converter + numpy2ri.converter
+    ).context():
+        y_r = ro.conversion.get_conversion().py2rpy( _y_np )
+
+    # -- Call the R function in one shot
+    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+        importances_r = _mald_continuous.stat_forest_mald_continuous(
+            X_all               = X_all_r,
+            y                   = y_r,
+            bandwidth           = bandwidth,
+            bandwidth_exponent  = bandwidth_exponent,
+            exponent            = exponent,
+            verbose             = verbose,
+            **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+        )
+
+    # -- Convert result back to numpy
+    with (
+        ro.default_converter + numpy2ri.converter
+    ).context():
+        importances: np.ndarray = np.asarray( importances_r )
+
+    return importances
+#/def rangerMaldImportances_continuous
+
+def rangerMaldImportances_count(
+    X: pl.DataFrame,
+    Xk: pl.DataFrame,
+    y: pl.Series | pl.DataFrame,
+    bandwidth: float = 1.0,
+    bandwidth_exponent: float = 0.2,
+    exponent: float = 1.0,
+    verbose: int = 0,
+    **kwargs,
+    ) -> np.ndarray:
     """
-.predictions.base.num <- .predictions.base$predictions
+        Count-outcome MALD importance via a ranger regression forest on log expected value.
+
+        The column loop runs entirely in R (stat.forest.mald_count), loaded
+        once per call via rpy2.robjects.packages.STAP.  Each predictor's local
+        gradient of log(predicted count) is used as the importance signal.
     """
+    assert X.schema == Xk.schema
+    X_all: pl.DataFrame = pl.concat(
+        [
+            X,
+            Xk.rename( {col: "{}~".format(col) for col in X.columns} )
+        ],
+        how = 'horizontal',
     )
 
-    importances_pointwise: np.ndarray = np.zeros(
-        shape = X_all.shape,
-        dtype = float,
+    # -- Load the R script via STAP
+    _script_path: str = os.path.normpath(
+        os.path.join(
+            os.path.dirname( os.path.abspath( __file__ ) ),
+            '..', '..', 'scripts',
+            'stat.forest.mald_count.R',
+        )
     )
-    
-    col: str
-    categories: pl.Series
-    predictions: np.ndarray
-    bandwidth_literal: float
-    
-    for j in range( X_all.shape[1] ):
-        col = X_all.columns[j]
-        
-        if X_all.schema[col] == pl.Categorical:
-            categories = X_all[col].cat.get_categories().sort()
-            predictions = np.zeros(
-                shape = ( X_all.shape[0], len( categories ), )
-            )
-            
-            # Set X[col] to each category, test predictions
-            for k in range( len( categories ) ):
-                with (
-                    ro.default_converter\
-                        + pandas2ri.converter
-                    #/
-                ).context():
-                    ro.globalenv['X.modified'] = X_all.with_columns(
-                        **{
-                            col: pl.lit( categories[k] ).cast(
-                                pl.Categorical
-                            )
-                        }
-                    ).to_pandas()
-                #/with( ro.default_converter + ... )
-                
-                ro.globalenv['.predictions.modified'] = rStats.predict(
-                    ro.globalenv['.forest'],
-                    data = ro.globalenv['X.modified'],
-                    type = 'response',
-                )
-                
-                
-                ro.r(
-                """
-.predictions.modified.val <- .predictions.modified$predictions
-                """
-                )
-                
-                with (
-                    ro.default_converter\
-                        + numpy2ri.converter
-                    #/
-                ).context():
-                    predictions[:,k] = ro.globalenv['.predictions.modified.val']
-                #/with (ro.default_converter + ... )
-                
-                importances_pointwise[:,j] = np.max(
-                    predictions, axis = 1,
-                ) - np.min(
-                    predictions, axis = 1
-                )
-            #/for k in range( len( categories) )
-        #
-        else:
-            # Numeric
-            bandwidth_literal = bandwidth*np.std(
-                X_all[col].to_numpy()
-            )/(X_all.shape[0]**bandwidth_exponent)
-            
-            # Nudge X, estimate derivative
-            with (
-                ro.default_converter\
-                    + pandas2ri.converter
-                #/
-            ).context():
-                ro.globalenv['X.modified'] = X_all.with_columns(
-                    **{
-                        col: pl.col( col ) + bandwidth_literal
-                    }
-                ).to_pandas()
-            #/with( ro.default_converter + ... )
-            
-            ro.globalenv['.predictions.modified'] = rStats.predict(
-                ro.globalenv['.forest'],
-                data = ro.globalenv['X.modified'],
-                type = 'response',
-            )
-            
-            ro.r(
-            """
-.predictions.modified.val <- .predictions.modified$predictions
-            """
-            )
-            
-            with (
-                ro.default_converter\
-                    + numpy2ri.converter
-                #/
-            ).context():
-                importances_pointwise[:,j] = (ro.globalenv['.predictions.modified.val']\
-                    - ro.globalenv['.predictions.base.num']
-                #/
-                )/bandwidth_literal
-            #/with (ro.default_converter + ... )
-        #/if X.schema[col] == pl.Categorical/else
-    #/for j in range( X.shape[1] )
-    
-    importances: np.ndarray = np.mean(
-        np.abs( importances_pointwise )**exponent,
-        axis = 0,
-    )
-    
+    with open( _script_path ) as _f:
+        _r_code: str = _f.read()
+    #
+    _mald_count = rpackages.STAP( _r_code, "mald_count" )
+
+    # -- Convert X_all to R data.frame
+    X_all_r: ro.DataFrame
+    with (
+        ro.default_converter + pandas2ri.converter
+    ).context():
+        X_all_r = ro.conversion.get_conversion().py2rpy( X_all.to_pandas() )
+    #
+
+    # -- Convert y to a numeric R vector (squeeze DataFrame to 1D, cast unsigned)
+    _y_series: pl.Series = y.to_series() if isinstance( y, pl.DataFrame ) else y
+    _y_np: np.ndarray = _y_series.to_numpy().astype( np.float64 )
+    with (
+        ro.default_converter + numpy2ri.converter
+    ).context():
+        y_r = ro.conversion.get_conversion().py2rpy( _y_np )
+    #
+
+    # -- Call the R function in one shot
+    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+        importances_r = _mald_count.stat_forest_mald_count(
+            X_all               = X_all_r,
+            y                   = y_r,
+            bandwidth           = bandwidth,
+            bandwidth_exponent  = bandwidth_exponent,
+            exponent            = exponent,
+            verbose             = verbose,
+            **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+        )
+
+    # -- Convert result back to numpy
+    with (
+        ro.default_converter + numpy2ri.converter
+    ).context():
+        importances: np.ndarray = np.asarray( importances_r )
+    #
+
     return importances
+#/def rangerMaldImportances_count
+
+def rangerMaldImportances_categorical(
+    X: pl.DataFrame,
+    Xk: pl.DataFrame,
+    y: pl.Series | pl.DataFrame,
+    bandwidth: float = 1.0,
+    bandwidth_exponent: float = 0.2,
+    exponent: float = 1.0,
+    verbose: int = 0,
+    **kwargs,
+    ) -> np.ndarray:
+    """
+        Categorical-outcome MALD importance via a probability ranger forest.
+
+        The column loop runs entirely in R (stat.forest.mald_categorical), loaded
+        once per call via rpy2.robjects.packages.STAP.  Each predictor's local
+        gradient of log-odds is summarised with a Mahalanobis norm using the
+        Fisher information of the base predictions.
+    """
+    assert X.schema == Xk.schema
+    X_all: pl.DataFrame = pl.concat(
+        [
+            X,
+            Xk.rename( {col: "{}~".format(col) for col in X.columns} )
+        ],
+        how = 'horizontal',
+    )
+
+    # -- Load the R script via STAP
+    _script_path: str = os.path.normpath(
+        os.path.join(
+            os.path.dirname( os.path.abspath( __file__ ) ),
+            '..', '..', 'scripts',
+            'stat.forest.mald_categorical.R',
+        )
+    )
+    with open( _script_path ) as _f:
+        _r_code: str = _f.read()
+    #
+    _mald_cat = rpackages.STAP( _r_code, "mald_cat" )
+
+    # -- Convert X_all to R data.frame
+    X_all_r: ro.DataFrame
+    with (
+        ro.default_converter + pandas2ri.converter
+    ).context():
+        X_all_r = ro.conversion.get_conversion().py2rpy( X_all.to_pandas() )
+    #
+
+    # -- Convert y to an R factor  (numpy object arrays are not accepted by ranger)
+    _y_series: pl.Series = y.to_series() if isinstance( y, pl.DataFrame ) else y
+    y_r: ro.FactorVector = ro.FactorVector(
+        _y_series.cast( pl.Utf8 ).to_list()
+    )
+
+    # -- Call the R function in one shot
+    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+        importances_r = _mald_cat.stat_forest_mald_categorical(
+            X_all               = X_all_r,
+            y                   = y_r,
+            bandwidth           = bandwidth,
+            bandwidth_exponent  = bandwidth_exponent,
+            exponent            = exponent,
+            verbose             = verbose,
+            **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+        )
+
+    # -- Convert result back to numpy
+    with (
+        ro.default_converter + numpy2ri.converter
+    ).context():
+        importances: np.ndarray = np.asarray( importances_r )
+    #
+
+    return importances
+#/def rangerMaldImportances_categorical
+
+def rangerMaldImportances(
+    X: pl.DataFrame,
+    Xk: pl.DataFrame,
+    y: pl.Series | pl.DataFrame,
+    outcome_type: Literal['continuous','count','categorical',] | None = None,
+    bandwidth: float = 1.0,
+    bandwidth_exponent: float = 0.2,
+    exponent: float = 1.0,
+    verbose: int = 0,
+    **kwargs,
+    ) -> np.ndarray:
+    """
+        :param kwargs: Passed to r ranger::ranger
+    """
+    outcomeDescriptor: OutcomeDescriptor = OutcomeDescriptor.infer(
+        y = y,
+        outcome_type = outcome_type,
+    )
+    
+    if outcomeDescriptor.outcome_type == 'continuous':
+        return rangerMaldImportances_continuous(
+            X = X,
+            Xk = Xk,
+            y = y,
+            bandwidth = bandwidth,
+            bandwidth_exponent = bandwidth_exponent,
+            exponent = exponent,
+            verbose = verbose,
+            **kwargs,
+        )
+    elif outcomeDescriptor.outcome_type == 'count':
+        return rangerMaldImportances_count(
+            X = X,
+            Xk = Xk,
+            y = y,
+            bandwidth = bandwidth,
+            bandwidth_exponent = bandwidth_exponent,
+            exponent = exponent,
+            verbose = verbose,
+            **kwargs,
+        )
+    #
+    elif outcomeDescriptor.outcome_type == 'categorical':
+        return rangerMaldImportances_categorical(
+            X = X,
+            Xk = Xk,
+            y = y,
+            bandwidth = bandwidth,
+            bandwidth_exponent = bandwidth_exponent,
+            exponent = exponent,
+            verbose = verbose,
+            **kwargs,
+        )
+    #
+    else:
+        raise ValueError(
+            "Unexpected outcomeDescriptor.outcome_type={}".format(
+                outcomeDescriptor.outcome_type
+            )
+        )
+    #/switch outcomeDescriptor.outcome_type
+    # EARLY RETURN/
 #/def rangerMaldImportances
 
 def rangerGiniImportances(
     X: pl.DataFrame,
     Xk: pl.DataFrame,
     y: pl.Series | pl.DataFrame,
+    outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
     verbose_prefix: str = '',
     **kwargs,
@@ -721,6 +692,14 @@ def rangerGiniImportances(
     """
         :param kwargs: Passed to r knockoff::stat.random_forest
     """
+    outcomeDescriptor: OutcomeDescriptor = OutcomeDescriptor.infer(
+        y = y,
+        outcome_type = outcome_type,
+    )
+    
+    if outcomeDescriptor.outcome_dimension != 'single':
+        raise TypeError("Joint outcomes unavailable")
+    #
     
     # stat_forest_hetero_gini gives only W stats, not importances
     # As a result, concatenate with zeros. This gives the same result.
@@ -741,18 +720,41 @@ def rangerGiniImportances(
     )
     
     w_stats_raw: np.ndarray
-    with (
-        ro.default_converter + numpy2ri.converter
-    ).context():
-        w_stats_raw = rKnockoff.stat_random_forest(
-            X = X_ohe,
-            X_k = Xk_ohe,
-            y = y.to_numpy(),
-            **kwargs,
-        )
-    #/with (r.default_converter + ... )
-    
-    # Take max from categorical, others literally
+    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+        if outcomeDescriptor.outcome_type == 'categorical':
+            _y_series: pl.Series = y.to_series() if isinstance(y, pl.DataFrame) else y
+            y_r = ro.FactorVector(_y_series.cast(pl.Utf8).to_list())
+            with (
+                ro.default_converter + numpy2ri.converter
+            ).context():
+                w_stats_raw = rKnockoff.stat_random_forest(
+                    X = X_ohe,
+                    X_k = Xk_ohe,
+                    y = y_r,
+                    **kwargs,
+                )
+        else:
+            _y_np: np.ndarray = (
+                y.to_numpy() if isinstance(y, np.ndarray)
+                else y.to_numpy() if isinstance(y, pl.Series)
+                else y.to_numpy().squeeze()
+            )
+            # rpy2 cannot convert unsigned integer dtypes
+            if np.issubdtype(_y_np.dtype, np.unsignedinteger):
+                _y_np = _y_np.astype(np.int64)
+            with (
+                ro.default_converter + numpy2ri.converter
+            ).context():
+                w_stats_raw = rKnockoff.stat_random_forest(
+                    X = X_ohe,
+                    X_k = Xk_ohe,
+                    y = _y_np,
+                    **kwargs,
+                )
+        #/if categorical/else
+    #/with _r_warnings_to_stdout
+
+    # Take max from categorical OHE columns, others literally
     w_stats: np.ndarray = np.fromiter(
         (
             w_stats_raw[ val ]\
@@ -763,7 +765,7 @@ def rangerGiniImportances(
         ),
         dtype = float,
     )
-    
+
     importances = np.concatenate(
         (
             w_stats,

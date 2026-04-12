@@ -283,3 +283,114 @@ def get_SCIP(
         **kwargs,
     )
 #/def get_SCIP
+
+def get_knockoffs(
+    X: pl.DataFrame,
+    method: Literal[
+        "second_order",
+        "GAN",
+        "GAN_torch",
+        "SCIP",
+    ],
+    rng: np.random.Generator,
+    conditional_expectations: pl.DataFrame | None = None,
+    verbose: int = 0,
+    verbose_prefix: str = '',
+    **kwargs,
+    ) -> pl.DataFrame:
+    """
+        Interface to name the knockoff method by string
+        
+        :param conditional_expectations: Necessary if kwargs['categorical_method'] == "scip"
+    """
+    numeric_columns: tuple[ str,... ] = tuple(
+        col for col, dtype in X.schema.items() if dtype != pl.Categorical
+    )
+    
+    Xk: pl.DataFrame
+    
+    if verbose > 0:
+        print( verbose_prefix + 'Making Knockoffs')
+        print( verbose_prefix +
+            '  method={}'.format( method )
+        )
+        for key, val in kwargs.items():
+            print(
+                verbose_prefix +\
+                    '  {}={}'.format( key, val )
+                #/
+            )
+        #
+    #
+    
+    if method == "second_order":
+        # kwargs should have 'categorical_method'
+        if kwargs['categorical_method'] == 'scip':
+            assert set( numeric_columns ) == set( conditional_expectations.columns )
+        #
+        else:
+            conditional_expectations = None
+        #
+        
+        Xk = get_second_order(
+            X = X,
+            rng = rng,
+            conditional_expectations = conditional_expectations,
+            verbose = verbose,
+            verbose_prefix = verbose_prefix,
+            **kwargs,
+        )
+    #
+    elif method == "GAN":
+        # kwargs should have 'categorical_method'
+        if kwargs['categorical_method'] == 'scip':
+            assert set( numeric_columns ) == set( conditional_expectations.columns )
+        #
+        else:
+            conditional_expectations = None
+        #
+        
+        Xk = get_GAN(
+            X = X,
+            rng = rng,
+            conditional_expectations = conditional_expectations,
+            verbose = verbose,
+            verbose_prefix = verbose_prefix,
+            **kwargs,
+        )
+    #
+    elif method == "GAN_torch":
+        # kwargs should have 'categorical_method'
+        if kwargs['categorical_method'] == 'scip':
+            assert set( numeric_columns ) == set( conditional_expectations.columns )
+        #
+        else:
+            conditional_expectations = None
+        #
+        
+        Xk = get_torchGAN(
+            X = X,
+            rng = rng,
+            conditional_expectations = conditional_expectations,
+            verbose = verbose,
+            verbose_prefix = verbose_prefix,
+            **kwargs,
+        )
+    #
+    elif method == "SCIP":
+        # kwargs may have 'residuals_method'
+        assert kwargs['residuals_method'] in ("permute","normal",)
+        Xk = get_SCIP(
+            X = X,
+            rng = rng,
+            verbose = verbose,
+            verbose_prefix = verbose_prefix,
+            **kwargs,
+        )
+    #
+    else:
+        raise ValueError("Unrecognized method={}".format(method))
+    #
+    
+    return Xk
+#/def get_knockoffs
