@@ -227,11 +227,10 @@ def get_torchGAN(
     verbose_prefix: str = '',
     **kwargs,
     ) -> pl.DataFrame:
-    
-    from . import torchGAN
+    from . import torchNetworks
     
     def knockoffCallable( x: np.ndarray ) -> np.ndarray:
-        model = torchGAN.TorchGAN(
+        model = torchNetworks.TorchGAN(
             shape          = x.shape,
             x_name         = kwargs.get( 'x_name',         'Normal' ),
             lamda          = kwargs.get( 'lamda',           1        ),

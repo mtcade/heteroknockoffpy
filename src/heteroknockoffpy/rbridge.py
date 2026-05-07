@@ -52,9 +52,12 @@ def _r_warnings_to_stdout():
     finally:
         _r_cb.consolewrite_warnerror = _orig_cb
         ro.r( f'options(warn={_orig_warn})' )
+    #/try/finally
+#/def _r_warnings_to_stdout
 
 if not rpackages.isinstalled('knockoff'):
     rutils = rpackages.importr('utils')
+    rutils.chooseCRANmirror(ind=1)
     rutils.install_packages(
         'knockoff',
     )
@@ -62,8 +65,9 @@ if not rpackages.isinstalled('knockoff'):
 
 if not rpackages.isinstalled('ranger'):
     rutils = rpackages.importr('utils')
+    rutils.chooseCRANmirror(ind=1)
     rutils.install_packages(
-        'knockoff',
+        'ranger',
     )
 #
 

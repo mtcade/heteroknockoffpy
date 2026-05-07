@@ -80,12 +80,14 @@ def _localGrad_forNumeric(
         :param inv_cov: Information of y_hat, used to calculate Mahalanobis distance. Used for categorical data and for joint outcomes.
         :param drop_first_y: If we should subtract the first column of predictions from the others; use this for categorical outcomes, but not other joint outcomes
     """
-    # Set the X + bandwidth matrix
-    X_epsilon: np.ndarray = np.copy( X )
-    X_epsilon[:, j ] += bandwidth
-    
-    # Get the approximation of local gradient via the definition of the derivative
-    local_grad: np.ndarray = ( model.predict(X_epsilon) - y_hat )/bandwidth
+    # Symmetric finite difference: estimate at X - h and X + h
+    X_minus: np.ndarray = np.copy( X )
+    X_minus[:, j ] -= bandwidth
+    X_plus: np.ndarray = np.copy( X )
+    X_plus[:, j ] += bandwidth
+
+    # Central difference approximation of local gradient
+    local_grad: np.ndarray = ( model.predict(X_plus) - model.predict(X_minus) ) / ( 2 * bandwidth )
     if inv_cov is None:
         assert y_hat.shape[1] == 1
         return local_grad.reshape( -1 )
@@ -215,9 +217,10 @@ def maldImportancesFromModel(
         
         :returns: Array of importances, with length equal to twice the width of `X`
         
-        Takes an initialized PredictionModel, likely fits it, and gets the MALD importances for each `X` and `Xk` variable
+        Takes an initialized PredictionModel, likely fits it, and gets the MALD importances for each `X` and `Xk` variable. Throws a warning if importances are 0.
         
     """
+    import warnings
     assert X.shape == Xk.shape
     
     # Check for categorical variables, one hot encode variables if necessary
@@ -339,11 +342,12 @@ def maldImportancesFromModel(
     )
     
     # If you get all zero importances, likely something went wrong
-    if np.allclose(
-        importances, 0
-    ):
-        raise Exception("Got zeros importances")
-    #
+    if np.allclose( importances, 0 ):
+        warnings.warn(
+            "Got zeros importances",
+            UserWarning,
+        )
+    #/if np.allclose( importances, 0 )
     
     return importances
 #/def importancesFromModel
@@ -363,10 +367,15 @@ def torchMaldImportances(
     dense_activation: str = 'relu',
     verbose: int = 0,
     ) -> np.ndarray:
+    """
+        Throws a warning if getting zeroes importances
+    """
     from . import torchNetworks
     import torch
     import torch.nn as nn
     from torch import Tensor, tensor
+    
+    import warnings
     
     outcomeDescriptor: OutcomeDescriptor = OutcomeDescriptor.infer(
         y = y,
@@ -508,7 +517,7 @@ def torchMaldImportances(
             )
         )
         # Permute to (n, p, k), compute contrasts → (n, p, k-1)
-        auto_diff_np: np.ndarray = auto_diff_tensor.permute( 0, 2, 1 ).detach().numpy()
+        auto_diff_np: np.ndarray = auto_diff_tensor.permute( 0, 2, 1 ).detach().cpu().numpy()
         auto_diff_np = auto_diff_np[:,:,1:] - auto_diff_np[:,:,0:1]
 
         # Mahalanobis distance over outcome contrasts: (n, p)
@@ -579,12 +588,13 @@ def torchMaldImportances(
         axis = 0
     )
     
-    # If you get all zero importances, likely something went wrong
-    if np.allclose(
-        importances, 0
-    ):
-        raise Exception("Got zeros importances")
-    #
+    # If you get all zero importances, perhaps something went wrong
+    if np.allclose( importances, 0 ):
+        warnings.warn(
+            "Got zeros importances",
+            UserWarning,
+        )
+    #/if np.allclose( importances, 0 )
     
     return importances
 #/def torchMaldImportance
@@ -811,8 +821,12 @@ def lassoImportances(
                 # Degenerate case: k=2 but returned as (2, p); just take abs of single contrast
                 lasso_coefficients = np.abs( coef_contrast[0, :] )
             else:
-                # np.cov with rowvar=True treats each row as a variable → (k-1, k-1) matrix
-                _cov: np.ndarray = np.cov( coef_contrast )
+                # Covariance from predicted log probabilities (one-hot convention: subtract first column)
+                _log_proba: np.ndarray = logisticModel.predict_log_proba(
+                    utilities.get_ohe_np( X = X_all_df, drop_first = True )
+                )  # (n, k)
+                _log_proba_contrast: np.ndarray = _log_proba[:, 1:] - _log_proba[:, 0:1]  # (n, k-1)
+                _cov: np.ndarray = np.cov( _log_proba_contrast, rowvar=False )  # (k-1, k-1)
                 inv_cov: np.ndarray = np.linalg.inv( _cov )
                 # Mahalanobis distance for each feature: sqrt( v^T inv_cov v ) over (k-1,) vectors
                 lasso_coefficients = np.sqrt(
@@ -974,7 +988,10 @@ def ridgeImportances(
             if coef_contrast.shape[0] == 1:
                 ridge_coefficients = np.abs( coef_contrast[0, :] )
             else:
-                _cov: np.ndarray = np.cov( coef_contrast )
+                # Covariance from predicted log probabilities (one-hot convention: subtract first column)
+                _log_proba: np.ndarray = logisticModel.predict_log_proba( X_ohe )  # (n, k)
+                _log_proba_contrast: np.ndarray = _log_proba[:, 1:] - _log_proba[:, 0:1]  # (n, k-1)
+                _cov: np.ndarray = np.cov( _log_proba_contrast, rowvar=False )  # (k-1, k-1)
                 inv_cov: np.ndarray = np.linalg.inv( _cov )
                 ridge_coefficients = np.sqrt(
                     np.einsum( 'kp,kl,lp->p', coef_contrast, inv_cov, coef_contrast )
@@ -1154,7 +1171,10 @@ def elasticImportances(
             if coef_contrast.shape[0] == 1:
                 elastic_coefficients = np.abs( coef_contrast[0, :] )
             else:
-                _cov: np.ndarray = np.cov( coef_contrast )
+                # Covariance from predicted log probabilities (one-hot convention: subtract first column)
+                _log_proba: np.ndarray = logisticModel.predict_log_proba( X_ohe )  # (n, k)
+                _log_proba_contrast: np.ndarray = _log_proba[:, 1:] - _log_proba[:, 0:1]  # (n, k-1)
+                _cov: np.ndarray = np.cov( _log_proba_contrast, rowvar=False )  # (k-1, k-1)
                 inv_cov: np.ndarray = np.linalg.inv( _cov )
                 elastic_coefficients = np.sqrt(
                     np.einsum( 'kp,kl,lp->p', coef_contrast, inv_cov, coef_contrast )
@@ -1184,6 +1204,8 @@ def elasticImportances(
 
     return importances
 #/def elasticImportances
+
+# -- W stats for every importance measure
 
 def wFromImportances(
     importances: np.ndarray,

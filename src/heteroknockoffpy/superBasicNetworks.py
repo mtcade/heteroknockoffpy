@@ -233,7 +233,7 @@ class SimpleNN():
             y_hat: tf.Tensor = self.call( _X )
         #
         
-        return tape.gradient( y_hat, _X ).numpy()
+        return tape.gradient( y_hat, _X ).cpu().numpy()
     #/def auto_diff
 #/class SimpleNN
 
