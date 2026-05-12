@@ -153,39 +153,41 @@ def choices_from_weights(
 
 def get_oheDict(
     X: pl.DataFrame,
-    drop_first = True
+    drop_first: bool = True,
+    categories_override: dict[ str, list[ str ] ] | None = None,
     ) -> dict[ str, int | tuple[ int,... ] ]:
     """
-        :param drop_first: Have k-1 columns when k categories
-        
-        Result maps original column names to single column if numeric, tuple of OHE columns for categories
-        
-        If drop_first, it does number of categories minus 1
+        Map each column in X to its position(s) in the OHE array.
+
+        Numeric columns map to a single int index; categorical columns map to
+        a tuple of ints (one per dummy column after optional drop_first).
+
+        :param categories_override: When provided, use this as the category
+            count for the named categorical columns instead of the unique values
+            present in X.  Must match the override passed to get_ohe_df/np.
     """
     counts_adjust: int = 1 if drop_first else 0
-    
-    ohe_dict: dict[ int, int | tuple[ int,... ] ] = {}
+
+    ohe_dict: dict[ str, int | tuple[ int,... ] ] = {}
     col_iterator: int = 0
-    
+
     for col in X.columns:
         if X.schema[ col ] == pl.Categorical:
-            # OHE columns = value_counts - 1
-            value_counts = len( X[ col ].value_counts() )
+            if categories_override and col in categories_override:
+                n_cats = len( categories_override[ col ] )
+            else:
+                n_cats = X[ col ].cast( pl.Utf8 ).n_unique()
             ohe_dict[ col ] = tuple(
-                range(
-                    col_iterator,
-                    col_iterator + value_counts - counts_adjust
-                )
+                range( col_iterator, col_iterator + n_cats - counts_adjust )
             )
-            col_iterator += ( value_counts - counts_adjust )
+            col_iterator += ( n_cats - counts_adjust )
         #
         else:
-            # Numeric, one column
             ohe_dict[ col ] = col_iterator
             col_iterator += 1
         #/if X.schema[ col ] == pl.Categorical
     #/for col in X.columns
-    
+
     return ohe_dict
 #/def get_oheDict
 
@@ -231,11 +233,9 @@ def makeChoices_ohe(
     #/switch method
     
     choices: pl.Series = pl.Series(
-        name = name,
-        values = (
-            categories[ int(k) ] for k in indices
-        ),
-        dtype = pl.Categorical,
+        name   = name,
+        values = ( str( categories[ int(k) ] ) for k in indices ),
+        dtype  = pl.Categorical,
     )
 
     return choices
@@ -356,55 +356,72 @@ def collapse_ohe(
 def get_ohe_df(
     X: pl.DataFrame,
     drop_first: bool = True,
-    **kwargs
+    categories_override: dict[ str, list[ str ] ] | None = None,
+    **kwargs,
     ) -> pl.DataFrame:
     """
-        :param **kwargs: Passed to `X.to_dummies`. Most likely:
-            - drop_null: bool = False
+        One-hot encode all pl.Categorical columns in X, dropping the first
+        lexically-sorted category when drop_first=True.
+
+        :param categories_override: When provided, specifies the full sorted
+            category list for each column.  Any category not present in X's
+            data will be added as an all-zero dummy column.  Use this to keep
+            Xk's OHE consistent with X's OHE when Xk may be missing some
+            category values.
     """
     separator: str = '_'
     categorical_columns: tuple[ str,... ] = tuple(
-        col for col, dtype in X.schema.items()\
-            if dtype == pl.Categorical
-        #/
+        col for col, dtype in X.schema.items()
+        if dtype == pl.Categorical
     )
-    
-    categories_dict: dict[ str, pl.Series ] = {
-        col: X[col].cat.get_categories().sort()\
-            for col in categorical_columns
-        #/
+
+    if not categorical_columns:
+        return X
+
+    # Use present values to determine category set (avoids global-cache bleed
+    # where polars 1.x merges Categorical vocabularies across series/frames).
+    categories_dict: dict[ str, list[ str ] ] = {
+        col: (
+            categories_override[ col ]
+            if categories_override and col in categories_override
+            else sorted( X[ col ].cast( pl.Utf8 ).unique().drop_nulls().to_list() )
+        )
+        for col in categorical_columns
     }
-            
-    # Hack to drop_first correctly: keep all dummies then drop the first category
-    X_keep = X.with_columns(
-        (
-            pl.col( col ).cast(
-                pl.Enum(
-                    categories_dict[ col ]
-                )
-            ) for col in categorical_columns
-        )
-    ).to_dummies(
-        categorical_columns,
+
+    X_keep: pl.DataFrame = X.to_dummies(
+        list( categorical_columns ),
         drop_first = False,
-        separator = '_',
+        separator  = separator,
     )
-    
-    if drop_first:
-        return X_keep.drop(
-            (
-                # drop '{col}_{first value}
-                "{}{}{}".format(
-                    col,
-                    separator,
-                    categories_dict[col][0],
-                ) for col in categorical_columns
-            )
+
+    # Add all-zero columns for categories present in the override but absent
+    # from the data (e.g. rare categories that knockoff never sampled).
+    n = len( X )
+    for col in categorical_columns:
+        for cat in categories_dict[ col ]:
+            dummy_name = "{}{}{}".format( col, separator, cat )
+            if dummy_name not in X_keep.columns:
+                X_keep = X_keep.with_columns(
+                    pl.lit( 0, dtype = pl.UInt8 ).alias( dummy_name )
+                )
+    #/for col
+
+    # Select columns in canonical order: non-categorical originals first, then
+    # for each categorical column its dummies in sorted-category order (with
+    # the first category omitted when drop_first=True).
+    final_cols: list[ str ] = [
+        c for c in X.columns if X.schema[ c ] != pl.Categorical
+    ]
+    for col in categorical_columns:
+        cats = categories_dict[ col ]
+        start = 1 if drop_first else 0
+        final_cols.extend(
+            "{}{}{}".format( col, separator, cat )
+            for cat in cats[ start: ]
         )
-    #
-    else:
-        return X_keep
-    #
+
+    return X_keep.select( final_cols )
 #/def get_ohe_df
 
 def get_ohe_np(
