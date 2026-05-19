@@ -44,14 +44,17 @@ def _r_warnings_to_stdout():
     Both are restored on exit.
     """
     _orig_cb = _r_cb.consolewrite_warnerror
-    _orig_warn: int = int( ro.r( 'getOption("warn")' )[0] )
+    with ( ro.default_converter ).context():
+        _orig_warn: int = int( ro.r( 'getOption("warn")' )[0] )
     _r_cb.consolewrite_warnerror = lambda s: (sys.stdout.write(s), sys.stdout.flush())
-    ro.r( 'options(warn=1)' )
+    with ( ro.default_converter ).context():
+        ro.r( 'options(warn=1)' )
     try:
         yield
     finally:
         _r_cb.consolewrite_warnerror = _orig_cb
-        ro.r( f'options(warn={_orig_warn})' )
+        with ( ro.default_converter ).context():
+            ro.r( f'options(warn={_orig_warn})' )
     #/try/finally
 #/def _r_warnings_to_stdout
 
@@ -708,14 +711,21 @@ def rangerGiniImportances(
     # stat_forest_hetero_gini gives only W stats, not importances
     # As a result, concatenate with zeros. This gives the same result.
     
+    _categories_override: dict[ str, list[ str ] ] = {
+        col: sorted( X[ col ].cast( pl.Utf8 ).unique().drop_nulls().to_list() )
+        for col in X.columns
+        if X.schema[ col ] == pl.Categorical
+    }
+
     X_ohe: np.ndarray = utilities.get_ohe_np(
         X = X,
         drop_first = True,
     )
-    
+
     Xk_ohe: np.ndarray = utilities.get_ohe_np(
         X = Xk,
         drop_first = True,
+        categories_override = _categories_override,
     )
     
     oheDict: dict[ str, int | tuple[ int,...] ] = utilities.get_oheDict(

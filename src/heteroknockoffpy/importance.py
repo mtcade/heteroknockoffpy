@@ -8,6 +8,7 @@ from .utilities import OutcomeDescriptor
 
 import numpy as np
 import polars as pl
+import torch
 
 from typing import Callable, Literal, Protocol, Self, Sequence
 from dataclasses import dataclass
@@ -180,6 +181,116 @@ def _localGrad_forCategories(
     
     # EARLY RETURN/
 #/def _localGrad_forCategories
+
+def _localGrad_forNumeric_t(
+    j: int,
+    X_t: torch.Tensor,
+    model: 'object',
+    bandwidth: float,
+    inv_cov_t: torch.Tensor | None = None,
+    drop_first_y: bool = True,
+    ) -> torch.Tensor:
+    X_minus = X_t.clone()
+    X_minus[:, j] -= bandwidth
+    X_plus = X_t.clone()
+    X_plus[:, j] += bandwidth
+    local_grad = ( model.predict_t( X_plus ) - model.predict_t( X_minus ) ) / ( 2.0 * bandwidth )
+    if inv_cov_t is None:
+        return local_grad.reshape( -1 )
+    #
+    if drop_first_y:
+        local_grad = local_grad[:, 1:] - local_grad[:, 0:1]
+    return torch.einsum( 'nk,kl,nl->n', local_grad, inv_cov_t, local_grad )
+#/def _localGrad_forNumeric_t
+
+
+def _localGrad_forCategories_t(
+    j: list[ int ],
+    X_t: torch.Tensor,
+    model: 'object',
+    drop_first: bool,
+    inv_cov_t: torch.Tensor | None = None,
+    drop_first_y: bool = True,
+    ) -> torch.Tensor:
+    preds: list[ torch.Tensor ] = []
+    for h in range( len( j ) ):
+        _X = X_t.clone()
+        _X[:, j] = 0.0
+        _X[:, j[h]] = 1.0
+        preds.append( model.predict_t( _X ) )
+    #
+    if drop_first:
+        _X = X_t.clone()
+        _X[:, j] = 0.0
+        preds.append( model.predict_t( _X ) )
+    #
+    y_out = torch.stack( preds, dim=2 )  # (n, output_dim, n_cats)
+    local_grad = y_out.amax( dim=2 ) - y_out.amin( dim=2 )  # (n, output_dim)
+    if inv_cov_t is None:
+        return local_grad.reshape( -1 )
+    #
+    if drop_first_y:
+        local_grad = local_grad[:, 1:] - local_grad[:, 0:1]
+    return torch.einsum( 'nk,kl,nl->n', local_grad, inv_cov_t, local_grad )
+#/def _localGrad_forCategories_t
+
+
+def _maldImportances_t(
+    model: 'object',
+    X_all_t: torch.Tensor,
+    oheDict: dict,
+    local_grad_method: str,
+    bandwidth: float | None,
+    exponent: float,
+    drop_first: bool = True,
+    inv_cov_t: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+    """
+    Tensor-native MALD importance computation. Returns shape (p_out,) tensor.
+    model must have predict_t and auto_diff_t methods.
+    """
+    n = X_all_t.shape[0]
+    p_out = len( oheDict )
+
+    if local_grad_method == 'auto_diff':
+        auto_diff_full_t: torch.Tensor = model.auto_diff_t( X_all_t )  # (n, p_ohe)
+    elif local_grad_method == 'bandwidth':
+        if bandwidth is None:
+            bandwidth = float( n ** -0.2 )
+    else:
+        raise ValueError( "Unrecognized local_grad_method='{}'".format( local_grad_method ) )
+    #
+
+    localGrad_t = torch.zeros( n, p_out, device=X_all_t.device )
+    for j_out, col in enumerate( oheDict ):
+        col_idx = oheDict[ col ]
+        if isinstance( col_idx, int ):
+            # numeric
+            if local_grad_method == 'auto_diff':
+                localGrad_t[:, j_out] = auto_diff_full_t[:, col_idx].reshape( -1 )
+            else:
+                localGrad_t[:, j_out] = _localGrad_forNumeric_t(
+                    j = col_idx,
+                    X_t = X_all_t,
+                    model = model,
+                    bandwidth = bandwidth,
+                    inv_cov_t = inv_cov_t,
+                )
+        else:
+            # categorical input variable — always plug-in regardless of local_grad_method
+            localGrad_t[:, j_out] = _localGrad_forCategories_t(
+                j = list( col_idx ),
+                X_t = X_all_t,
+                model = model,
+                drop_first = drop_first,
+                inv_cov_t = inv_cov_t,
+            )
+        #
+    #
+
+    return ( torch.abs( localGrad_t ) ** exponent ).mean( dim=0 )
+#/def _maldImportances_t
+
 
 def maldImportancesFromModel(
     model: PredictionModel,
@@ -367,62 +478,61 @@ def torchMaldImportances(
     dense_activation: str = 'relu',
     verbose: int = 0,
     ) -> np.ndarray:
-    """
-        Throws a warning if getting zeroes importances
-    """
+    """Throws a warning if getting zero importances."""
     from . import torchNetworks
-    import torch
     import torch.nn as nn
-    from torch import Tensor, tensor
-    
     import warnings
-    
+
     outcomeDescriptor: OutcomeDescriptor = OutcomeDescriptor.infer(
         y = y,
         outcome_type = outcome_type,
     )
-    
+
     if outcomeDescriptor.outcome_dimension != 'single':
         raise TypeError("Joint outcomes unavailable")
     #
-    
+
+    assert all( X.schema[col] == Xk.schema[col] for col in X.columns )
+
     X_all: pl.DataFrame = pl.concat(
         (
             X,
-            Xk.rename({
-                col: col + '~' for col in Xk.columns
-            }),
+            Xk.rename({ col: col + '~' for col in Xk.columns }),
         ),
         how = 'horizontal',
     )
-    
-    X_all_np: np.ndarray
-    oheDict: dict[ str, int | tuple[ int,... ] ]
-    if isinstance( X, pl.DataFrame ):
-        from . import utilities
-        assert all( X.schema[col] == Xk.schema[col] for col in X.columns )
-        
-        X_all_np = utilities.get_ohe_np(
-            X = X_all,
-            drop_first = drop_first,
-        )
-        
-        oheDict = utilities.get_oheDict(
-            X = X_all,
-            drop_first = drop_first,
-        )
-    #/if isinstance( X, pl.DataFrame )
-    else:
-        X_all_np = np.concatenate(
-            ( X, Xk ),
-            axis = 1
-        )
-    #/if isinstance( X, pl.DataFrame )/else
-    
-    # -- Make model
-    if outcomeDescriptor.outcome_type == 'categorical':
-        _y_series: pl.Series = y if isinstance( y, pl.Series ) else y.to_series()
+
+    X_all_np: np.ndarray = utilities.get_ohe_np( X = X_all, drop_first = drop_first )
+    oheDict: dict[ str, int | tuple[ int,... ] ] = utilities.get_oheDict( X = X_all, drop_first = drop_first )
+
+    # -- Build model
+
+    if outcomeDescriptor.outcome_type == 'continuous':
         predictionModel: torchNetworks.PredictionModel_Numeric = torchNetworks.PredictionModel_Numeric(
+            input_size = X_all_np.shape[1],
+            layers = layers,
+            dense_activation = dense_activation,
+            loss_func = nn.MSELoss(),
+            learning_rate = learning_rate,
+            epochs = epochs,
+            verbose = verbose,
+        )
+    #
+    elif outcomeDescriptor.outcome_type == 'count':
+        y = y.cast( pl.Int64 ) if isinstance( y, pl.Series ) else y.cast( { col: pl.Int64 for col in y.columns } )
+        predictionModel = torchNetworks.PredictionModel_Numeric(
+            input_size = X_all_np.shape[1],
+            layers = layers,
+            dense_activation = dense_activation,
+            loss_func = nn.PoissonNLLLoss( log_input=True ),
+            learning_rate = learning_rate,
+            epochs = epochs,
+            verbose = verbose,
+        )
+    #
+    elif outcomeDescriptor.outcome_type == 'categorical':
+        _y_series: pl.Series = y if isinstance( y, pl.Series ) else y.to_series()
+        predictionModel = torchNetworks.PredictionModel_Numeric(
             input_size = X_all_np.shape[1],
             layers = layers,
             dense_activation = dense_activation,
@@ -432,172 +542,344 @@ def torchMaldImportances(
             epochs = epochs,
             verbose = verbose,
         )
-        
     #
     else:
-        if outcomeDescriptor.outcome_type == 'continuous':
-            predictionModel: torchNetworks.PredictionModel_Numeric = torchNetworks.PredictionModel_Numeric(
-                input_size = X_all_np.shape[1],
-                layers = layers,
-                dense_activation = dense_activation,
-                loss_func = nn.MSELoss(),
-                learning_rate = learning_rate,
-                epochs = epochs,
-                verbose = verbose,
+        raise ValueError(
+            "Unrecognized outcomeDescriptor.outcome_type={}".format( outcomeDescriptor.outcome_type )
+        )
+    #
+
+    # y as numpy for fit
+    y_np: np.ndarray
+    if outcomeDescriptor.outcome_type == 'categorical':
+        y_np = _y_series.to_physical().to_numpy().astype( np.int64 )
+    else:
+        _y_tmp = y.to_numpy() if isinstance( y, pl.Series | pl.DataFrame ) else np.asarray( y )
+        y_np = _y_tmp.reshape( X_all_np.shape[0], -1 )
+        if y_np.shape[1] == 1:
+            y_np = y_np[:, 0]
+    #
+
+    # Fit once with numpy (unavoidable single conversion inside fit)
+    predictionModel.fit( X = X_all_np, y = y_np )
+
+    # Convert X to tensor once — all gradient computation stays in tensor space
+    X_all_t: torch.Tensor = torch.tensor(
+        X_all_np, dtype=torch.float32
+    ).to( predictionModel.device )
+
+    importances_t: torch.Tensor
+
+    if outcomeDescriptor.outcome_type == 'categorical':
+        # -- Categorical outcome: Mahalanobis distance over logit contrasts
+
+        y_hat_t: torch.Tensor = predictionModel.predict_t( X_all_t )  # (n, k)
+        logit_contrasts_t = y_hat_t[:, 1:] - y_hat_t[:, 0:1]         # (n, k-1)
+
+        _cov_t = torch.cov( logit_contrasts_t.T )                     # (k-1, k-1) or scalar
+        if _cov_t.ndim == 0:
+            inv_cov_t: torch.Tensor = torch.tensor(
+                [[ 1.0 / _cov_t.item() ]], device=X_all_t.device
             )
+        else:
+            inv_cov_t = torch.linalg.inv( _cov_t )
         #
-        elif outcomeDescriptor.outcome_type == 'count':
-            # Uses a log prediction of expected value, due to nn.PoissonNLLLoss( log_input=True)
-            # Raw gradient will still work for numeric data
-            predictionModel: torchNetworks.PredictionModel_Numeric = torchNetworks.PredictionModel_Numeric(
-                input_size = X_all_np.shape[1],
-                layers = layers,
-                dense_activation = dense_activation,
-                loss_func = nn.PoissonNLLLoss(
-                    log_input=True
-                ),
-                learning_rate = learning_rate,
-                epochs = epochs,
-                verbose = verbose,
+
+        if local_grad_method == 'auto_diff':
+            # Full Jacobian (n, k, p_ohe) → contrasts → Mahalanobis → (n, p_ohe)
+            jac_t: torch.Tensor = torchNetworks.get_logit_jacobian(
+                model = predictionModel.model,
+                x = X_all_t,
             )
-            
-            # Tensorflow cannot handle UInt32 so promote to Int64
-            y = y.cast( pl.Int64 ) if isinstance( y, pl.Series ) else y.cast( { col: pl.Int64 for col in y.columns } )
+            jac_t = jac_t.permute( 0, 2, 1 )                          # (n, p_ohe, k)
+            jac_t = jac_t[:, :, 1:] - jac_t[:, :, 0:1]               # (n, p_ohe, k-1)
+            auto_diff_matrix_t = torch.einsum(
+                'npk,kl,npl->np', jac_t, inv_cov_t, jac_t,
+            )                                                           # (n, p_ohe)
+
+            # Collapse per original column
+            p_out = X.shape[1] + Xk.shape[1]
+            localGrad_t = torch.zeros( X_all_t.shape[0], p_out, device=X_all_t.device )
+            for j_out, col in enumerate( oheDict ):
+                col_idx = oheDict[ col ]
+                if isinstance( col_idx, int ):
+                    localGrad_t[:, j_out] = auto_diff_matrix_t[:, col_idx]
+                else:
+                    # categorical input: plug-in with Mahalanobis
+                    localGrad_t[:, j_out] = _localGrad_forCategories_t(
+                        j = list( col_idx ),
+                        X_t = X_all_t,
+                        model = predictionModel,
+                        drop_first = drop_first,
+                        inv_cov_t = inv_cov_t,
+                    )
+                #
+            #
+            importances_t = ( torch.abs( localGrad_t ) ** exponent ).mean( dim=0 )
         #
         else:
-            raise ValueError(
-                "Unrecognized outcomeDescriptor.outcome_type={}".format(outcomeDescriptor.outcome_type)
+            importances_t = _maldImportances_t(
+                model = predictionModel,
+                X_all_t = X_all_t,
+                oheDict = oheDict,
+                local_grad_method = 'bandwidth',
+                bandwidth = bandwidth,
+                exponent = exponent,
+                drop_first = drop_first,
+                inv_cov_t = inv_cov_t,
             )
-        #/switch outcomeDescriptor.outcome_type
-        return maldImportancesFromModel(
+        #
+    #
+    else:
+        # -- Continuous / count outcome
+        importances_t = _maldImportances_t(
             model = predictionModel,
-            X = X,
-            Xk = Xk,
-            y = y,
-            outcome_type = outcome_type,
+            X_all_t = X_all_t,
+            oheDict = oheDict,
             local_grad_method = local_grad_method,
-            fit = True,
             bandwidth = bandwidth,
             exponent = exponent,
             drop_first = drop_first,
-            verbose = verbose,
         )
-    #/if outcomeDescriptor.outcome_type == 'categorical'/else
-    
-    # outcomeDescriptor.outcome_type == 'categorical'
-    # Integer class codes (long) for CrossEntropyLoss
-    _y_series: pl.Series = y if isinstance( y, pl.Series ) else y.to_series()
-    y_np_codes: np.ndarray = _y_series.to_physical().to_numpy().astype( np.int64 )  # (n,)
-
-    predictionModel.fit(
-        X = X_all_np,
-        y = y_np_codes,
-    )
-
-    # -- Get the mald importance
-
-    y_hat: np.ndarray = predictionModel.predict(
-        X_all_np
-    )
-    # Inverse covariance of contrasted logits for Mahalanobis distance
-    logit_contrasts: np.ndarray = y_hat[:,1:] - y_hat[:,0:1]  # (n, k-1)
-    _cov = np.cov( logit_contrasts, rowvar = False )
-    if _cov.ndim == 0:
-        # k=2: cov is a scalar; wrap as (1, 1)
-        inv_cov: np.ndarray = np.array( [[ 1.0 / float(_cov) ]] )
-    else:
-        inv_cov: np.ndarray = np.linalg.inv( _cov )
     #
-    if local_grad_method == 'auto_diff':
-        # Jacobian of logits: (n, k, p)
-        auto_diff_tensor: Tensor = torchNetworks.get_logit_jacobian(
-            model = predictionModel.model,
-            x = torch.tensor( X_all_np ).float().to(
-                predictionModel.device
-            )
-        )
-        # Permute to (n, p, k), compute contrasts → (n, p, k-1)
-        auto_diff_np: np.ndarray = auto_diff_tensor.permute( 0, 2, 1 ).detach().cpu().numpy()
-        auto_diff_np = auto_diff_np[:,:,1:] - auto_diff_np[:,:,0:1]
 
-        # Mahalanobis distance over outcome contrasts: (n, p)
-        auto_diff_matrix: np.ndarray = np.einsum(
-            'npk,kl,npl->np',
-            auto_diff_np,
-            inv_cov,
-            auto_diff_np,
-        )
+    importances: np.ndarray = importances_t.cpu().numpy()
 
-        y_hat = None
-    #
-    elif local_grad_method == 'bandwidth':
-        auto_diff_matrix = None
-
-        if bandwidth is None:
-            bandwidth = X_all_np.shape[0]**(-0.2)
-        #/if bandwidth is None
-    #
-    else:
-        raise ValueError("Unrecognized local_grad_method='{}'".format(local_grad_method))
-    #/switch local_grad_method
-    
-    p_out: int = X.shape[1] + Xk.shape[1]
-    localGrad_matrix: np.ndarray = np.zeros(
-        shape = ( X.shape[0], p_out )
-    )
-    j: int = 0
-    for col in tuple( oheDict ):
-        if isinstance( oheDict[col], int ):
-            # numeric
-            if local_grad_method == 'auto_diff':
-                column_grad = auto_diff_matrix[:, oheDict[col] ]
-                localGrad_matrix[:,j] = column_grad
-            #
-            elif local_grad_method == 'bandwidth':
-                column_grad = _localGrad_forNumeric(
-                    j = oheDict[col],
-                    X = X_all_np,
-                    y_hat = y_hat,
-                    model = predictionModel,
-                    bandwidth = bandwidth,
-                    inv_cov = inv_cov,
-                )
-                
-                localGrad_matrix[ :, j ] = column_grad
-            #
-            else:
-                raise ValueError("Unrecognized local_grad_method='{}'".format(local_grad_method))
-            #/switch local_grad_method
-        #
-        else:
-            # category
-            column_grad = _localGrad_forCategories(
-                j = oheDict[ col ],
-                X = X_all_np,
-                model = predictionModel,
-                drop_first = drop_first,
-                inv_cov = inv_cov,
-            )
-            localGrad_matrix[:,j] = column_grad
-        #/if isinstance( oheDict[j], int )/else
-        j += 1
-    #/for j in range( p_out )
-    
-    importances: np.ndarray = np.mean(
-        np.abs( localGrad_matrix )**exponent,
-        axis = 0
-    )
-    
-    # If you get all zero importances, perhaps something went wrong
     if np.allclose( importances, 0 ):
-        warnings.warn(
-            "Got zeros importances",
-            UserWarning,
-        )
-    #/if np.allclose( importances, 0 )
-    
+        warnings.warn( "Got zeros importances", UserWarning )
+    #
+
     return importances
-#/def torchMaldImportance
+#/def torchMaldImportances
+
+def _prism_setup(
+    X: pl.DataFrame,
+    Xk: pl.DataFrame,
+    y: pl.Series | pl.DataFrame,
+    layers: Sequence[int],
+    outcome_type: Literal['continuous','count','categorical'] | None,
+    drop_first: bool,
+    ) -> tuple:
+    """
+    Shared setup for prismWImportances and prismGImportances.
+
+    Returns (X_all_np, y_np, groups, oheDict, loss_func, output_dimension, outcomeDescriptor).
+    """
+    import torch.nn as nn
+    from . import torchNetworks
+
+    outcomeDescriptor: OutcomeDescriptor = OutcomeDescriptor.infer(
+        y = y,
+        outcome_type = outcome_type,
+    )
+    if outcomeDescriptor.outcome_dimension != 'single':
+        raise TypeError("Joint outcomes unavailable")
+    #
+
+    assert all( X.schema[col] == Xk.schema[col] for col in X.columns )
+
+    X_all: pl.DataFrame = pl.concat(
+        (
+            X,
+            Xk.rename({ col: col + '~' for col in Xk.columns }),
+        ),
+        how = 'horizontal',
+    )
+
+    X_all_np: np.ndarray = utilities.get_ohe_np( X = X_all, drop_first = drop_first )
+    oheDict: dict[ str, int | tuple[ int,... ] ] = utilities.get_oheDict( X = X_all, drop_first = drop_first )
+
+    groups: list[ list[int] ] = [
+        [oheDict[col]] if isinstance( oheDict[col], int ) else list( oheDict[col] )
+        for col in oheDict
+    ]
+
+    y_np: np.ndarray
+    if isinstance( y, pl.Series | pl.DataFrame ):
+        y_np = y.to_numpy()
+    else:
+        y_np = np.asarray(y)
+    #
+
+    loss_func: nn.Module
+    output_dimension: int
+
+    if outcomeDescriptor.outcome_type == 'continuous':
+        loss_func = nn.MSELoss()
+        output_dimension = 1
+        y_np = y_np.reshape(-1)
+    #
+    elif outcomeDescriptor.outcome_type == 'count':
+        loss_func = nn.PoissonNLLLoss( log_input = True )
+        output_dimension = 1
+        y_np = y_np.reshape(-1).astype( np.int64 )
+    #
+    elif outcomeDescriptor.outcome_type == 'categorical':
+        _y_series: pl.Series = y if isinstance( y, pl.Series ) else y.to_series()
+        loss_func = nn.CrossEntropyLoss()
+        output_dimension = len( _y_series.cat.get_categories() )
+        y_np = _y_series.to_physical().to_numpy().astype( np.int64 )
+    #
+    else:
+        raise ValueError(
+            "Unrecognized outcomeDescriptor.outcome_type='{}'".format(
+                outcomeDescriptor.outcome_type,
+            )
+        )
+    #
+
+    return X_all_np, y_np, groups, oheDict, loss_func, output_dimension, outcomeDescriptor
+#/def _prism_setup
+
+
+_DEFAULT_LAMBDA_PATH: np.ndarray = np.logspace( 1, -2, 50 )
+
+
+def prismWImportances(
+    X: pl.DataFrame,
+    Xk: pl.DataFrame,
+    y: pl.Series | pl.DataFrame,
+    layers: Sequence[ int ],
+    outcome_type: Literal['continuous','count','categorical',] | None = None,
+    lambda_path: Sequence[ float ] | None = None,
+    a_min: float | None = None,
+    epochs_per_batch: int = 10,
+    model_type: str = 'mlp',
+    learning_rate: float = 0.01,
+    drop_first: bool = True,
+    dense_activation: str = 'relu',
+    verbose: int = 0,
+    ) -> np.ndarray:
+    """
+    PRISM-W importances: average of group-norm snapshots over a lambda regularization path.
+
+    Trains a single MLP on [X, Xk] → y with a group-lasso penalty on the input layer.
+    At the end of each lambda stage the group norms ||w[:, group_j]||_F are recorded;
+    the final importances are the mean over all snapshots.
+
+    :param lambda_path: Sequence of lambda values (large→small). Defaults to logspace(1,-2,50).
+    :param a_min: When set, enables adaptive per-group penalty: eff_lambda_j = lambda / max(init_norm_j, a_min).
+    :param epochs_per_batch: Training epochs per lambda stage.
+    :returns: Array of shape (2*p,) — first p entries for X, last p for Xk.
+    """
+    from . import torchNetworks
+
+    if lambda_path is None:
+        lambda_path = _DEFAULT_LAMBDA_PATH
+    #
+
+    X_all_np, y_np, groups, _, loss_func, output_dimension, _ = _prism_setup(
+        X = X, Xk = Xk, y = y,
+        layers = layers,
+        outcome_type = outcome_type,
+        drop_first = drop_first,
+    )
+
+    predictionModel: torchNetworks.PRISMPredictionModel = torchNetworks.PRISMPredictionModel(
+        input_size = X_all_np.shape[1],
+        layers = list( layers ),
+        dense_activation = dense_activation,
+        loss_func = loss_func,
+        output_dimension = output_dimension,
+        learning_rate = learning_rate,
+        epochs_per_batch = epochs_per_batch,
+        model_type = model_type,
+        verbose = verbose,
+    )
+
+    snapshots: list[ np.ndarray ] = predictionModel.fit(
+        X = X_all_np,
+        y = y_np,
+        groups = groups,
+        lambda_path = lambda_path,
+        a_min = a_min,
+    )
+
+    return np.mean( snapshots, axis = 0 )
+#/def prismWImportances
+
+
+def prismGImportances(
+    X: pl.DataFrame,
+    Xk: pl.DataFrame,
+    y: pl.Series | pl.DataFrame,
+    layers: Sequence[ int ],
+    outcome_type: Literal['continuous','count','categorical',] | None = None,
+    local_grad_method: Literal['auto_diff','bandwidth'] = 'auto_diff',
+    lambda_path: Sequence[ float ] | None = None,
+    a_min: float | None = None,
+    epochs_per_batch: int = 10,
+    bandwidth: float | None = None,
+    exponent: float = 1.0,
+    model_type: str = 'mlp',
+    learning_rate: float = 0.01,
+    drop_first: bool = True,
+    dense_activation: str = 'relu',
+    verbose: int = 0,
+    ) -> np.ndarray:
+    """
+    PRISM-G importances: average of MALD local-gradient snapshots over a lambda path.
+
+    Same training procedure as prismWImportances; at the end of each lambda stage the
+    MALD importances (auto_diff or bandwidth) of the current model are recorded.
+    Delegates snapshot computation to maldImportancesFromModel(fit=False).
+
+    :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite difference).
+    :param lambda_path: Sequence of lambda values (large→small). Defaults to logspace(1,-2,50).
+    :param a_min: When set, enables adaptive per-group penalty.
+    :param bandwidth: Bandwidth for finite-difference approximation (auto-set if None).
+    :param exponent: Power applied to each local gradient value before averaging.
+    :returns: Array of shape (2*p,).
+    """
+    from . import torchNetworks
+
+    if lambda_path is None:
+        lambda_path = _DEFAULT_LAMBDA_PATH
+    #
+
+    X_all_np, y_np, groups, oheDict, loss_func, output_dimension, _ = _prism_setup(
+        X = X, Xk = Xk, y = y,
+        layers = layers,
+        outcome_type = outcome_type,
+        drop_first = drop_first,
+    )
+
+    predictionModel: torchNetworks.PRISMPredictionModel = torchNetworks.PRISMPredictionModel(
+        input_size = X_all_np.shape[1],
+        layers = list( layers ),
+        dense_activation = dense_activation,
+        loss_func = loss_func,
+        output_dimension = output_dimension,
+        learning_rate = learning_rate,
+        epochs_per_batch = epochs_per_batch,
+        model_type = model_type,
+        verbose = verbose,
+    )
+
+    def snapshot_fn( model: torchNetworks.PRISMPredictionModel, X_t: torch.Tensor ) -> np.ndarray:
+        return _maldImportances_t(
+            model = model,
+            X_all_t = X_t,
+            oheDict = oheDict,
+            local_grad_method = local_grad_method,
+            bandwidth = bandwidth,
+            exponent = exponent,
+            drop_first = drop_first,
+        ).cpu().numpy()
+    #/def snapshot_fn
+
+    snapshots: list[ np.ndarray ] = predictionModel.fit(
+        X = X_all_np,
+        y = y_np,
+        groups = groups,
+        lambda_path = lambda_path,
+        a_min = a_min,
+        snapshot_fn = snapshot_fn,
+    )
+
+    return np.mean( snapshots, axis = 0 )
+#/def prismGImportances
+
 
 def rangerMaldImportances(
     X: pl.DataFrame,

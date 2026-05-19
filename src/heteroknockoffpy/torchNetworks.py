@@ -15,7 +15,7 @@ import numpy as np
 import math
 
 from tqdm import tqdm
-from typing import Sequence, Self, Type
+from typing import Callable, Sequence, Self, Type
 
 # -- KnockoffGAN networks
 
@@ -359,34 +359,48 @@ class PredictionModel_Numeric():
         return
     #/def fit
     
+    def predict_t(
+        self: Self,
+        X_t: torch.Tensor,
+        ) -> torch.Tensor:
+        self.model.eval()
+        with torch.no_grad():
+            result = self.model( X_t )
+        self.model.train()
+        return result
+    #/def predict_t
+
     def predict(
         self: Self,
         X: np.ndarray,
         ) -> np.ndarray:
-        y_hat: np.ndarray = self.model(
-            torch.tensor( X ).float().to( self.device )
-        ).detach().cpu().numpy()
-        
-        return y_hat
+        return self.predict_t(
+            torch.tensor( X, dtype=torch.float32 ).to( self.device )
+        ).cpu().numpy()
     #/def predict
-    
+
+    def auto_diff_t(
+        self: Self,
+        X_t: torch.Tensor,
+        ) -> torch.Tensor:
+        self.model.eval()
+        X_t = X_t.detach().requires_grad_( True )
+        y_pred: torch.Tensor = self.model( X_t )
+        grad = torch.autograd.grad(
+            outputs = y_pred,
+            inputs = X_t,
+            grad_outputs = torch.ones_like( y_pred ),
+        )
+        self.model.train()
+        return grad[0].detach()
+    #/def auto_diff_t
+
     def auto_diff(
         self: Self,
         X: np.ndarray,
         ) -> np.ndarray:
-        X_torch: torch.tensor = torch.tensor( X ).float().to( self.device )
-        X_torch.requires_grad = True
-        
-        y_pred: torch.Tensor = self.model( X_torch )
-        
-        grad: tuple[ torch.Tensor,... ] = torch.autograd.grad(
-            outputs = y_pred,
-            inputs = X_torch,
-            grad_outputs = torch.ones_like( y_pred ),
-        )
-        
-        return torch.cat(
-            grad, dim=0
+        return self.auto_diff_t(
+            torch.tensor( X, dtype=torch.float32 ).to( self.device )
         ).cpu().numpy()
     #/def auto_diff
 #class PredictionModel_Numeric():
@@ -679,8 +693,8 @@ class TorchGAN(nn.Module):
         ) -> np.ndarray:
         """
             Standard torch forward call.
-            
-            
+
+
         """
         # Allow possibility of BatchNorm, Dropout, or other training effects
         self.eval()
@@ -697,9 +711,283 @@ class TorchGAN(nn.Module):
                 self.device,
             )
             Xk = self.generator(X_tensor, Z)
-            
+
         # Back to training mode
         self.train()
         return Xk.cpu().numpy()
     #/def forward
 #/class TorchGAN
+
+# -- PRISM
+
+class PRISMNetwork(nn.Module):
+    """
+    MLP with a separate input_layer so group-lasso proximal steps and group norms
+    can be applied directly to the first-layer weights.
+
+    forward: rest(activation(input_layer(x)))
+    """
+    def __init__(
+        self: Self,
+        input_size: int,
+        layers: Sequence[int],
+        activation_class: type[nn.Module],
+        output_size: int,
+        output_activation: type[nn.Module] | None = None,
+    ) -> None:
+        super().__init__()
+        self.input_layer = nn.Linear(input_size, layers[0])
+        self.activation = activation_class()
+        self.rest = _build_sequential(
+            input_size = layers[0],
+            layers = layers[1:],
+            activation = activation_class,
+            output_size = output_size,
+            output_activation = output_activation,
+        )
+    #/def __init__
+
+    def forward(
+        self: Self,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.rest(self.activation(self.input_layer(x)))
+    #/def forward
+#/class PRISMNetwork
+
+
+class PRISMPredictionModel:
+    """
+    Wraps PRISMNetwork for PRISM-W and PRISM-G importance computation.
+
+    Trains over a lambda_path (regularization path), recording an importance
+    snapshot at the end of each lambda stage. The final importance is the
+    caller's average over snapshots.
+
+    Implements fit / predict / auto_diff to satisfy the PredictionModel protocol.
+    """
+    def __init__(
+        self: Self,
+        input_size: int,
+        layers: Sequence[int],
+        dense_activation: str | type[nn.Module] = 'relu',
+        loss_func: nn.Module = nn.MSELoss(),
+        output_dimension: int = 1,
+        learning_rate: float = 0.01,
+        epochs_per_batch: int = 10,
+        model_type: str = 'mlp',
+        verbose: int = 0,
+    ) -> None:
+        activation_class: type[nn.Module]
+        if isinstance(dense_activation, str):
+            activation_class = _nnModule_dict[dense_activation]
+        else:
+            activation_class = dense_activation
+        #
+
+        self.device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"
+
+        self.model = PRISMNetwork(
+            input_size = input_size,
+            layers = list(layers),
+            activation_class = activation_class,
+            output_size = output_dimension,
+        ).to(self.device)
+
+        self.loss_func = loss_func
+        self.learning_rate = learning_rate
+        self.epochs_per_batch = epochs_per_batch
+        self.verbose = verbose
+    #/def __init__
+
+    def fit(
+        self: Self,
+        X: np.ndarray,
+        y: np.ndarray,
+        groups: list[list[int]],
+        lambda_path: Sequence[float],
+        a_min: float | None = None,
+        snapshot_fn: Callable[['PRISMPredictionModel', torch.Tensor], np.ndarray] | None = None,
+    ) -> list[np.ndarray]:
+        """
+        Train over the lambda_path; record one importance snapshot per lambda stage.
+
+        :param groups: One list of OHE column indices per original feature (length 2*p).
+        :param lambda_path: Sequence of lambda values (e.g. large→small).
+        :param a_min: When set, enables adaptive scaling: eff_lambda_j = lambda / max(init_norm_j, a_min).
+        :param snapshot_fn: If None, snapshots use get_group_importances (PRISM-W).
+                            Otherwise called as snapshot_fn(self) (for PRISM-G).
+        :returns: List of importance arrays, one per lambda in lambda_path.
+        """
+        X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
+        _y = np.asarray(y)
+        if np.issubdtype(_y.dtype, np.integer):
+            y_tensor = torch.tensor(_y).long().to(self.device)
+        else:
+            y_tensor = torch.tensor(_y, dtype=torch.float32).to(self.device)
+        #
+
+        optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.model.train()
+
+        # Compute group norms before training for adaptive scaling
+        init_norms: list[float] | None = None
+        if a_min is not None:
+            with torch.no_grad():
+                w = self.model.input_layer.weight.data
+                init_norms = [
+                    torch.norm(w[:, group_j]).item() if group_j else 0.0
+                    for group_j in groups
+                ]
+            #
+        #
+
+        snapshots: list[np.ndarray] = []
+
+        # Precompute group structure — single-column (numeric) vs multi-column (categorical).
+        _single_pairs = [(j, g[0]) for j, g in enumerate(groups) if len(g) == 1]
+        _cat_groups   = [(j, g)    for j, g in enumerate(groups) if len(g) > 1]
+
+        _num_cols: torch.Tensor | None = None
+        if _single_pairs:
+            _num_cols = torch.tensor([c for _, c in _single_pairs], device=self.device)
+        #
+
+        # Adaptive proximal denominators — only needed when a_min is set.
+        _num_eff_denom: torch.Tensor | None = None
+        _cat_eff_denoms: list[float] | None = None
+        if a_min is not None:
+            if _single_pairs:
+                _num_eff_denom = torch.tensor(
+                    [1.0 / max(init_norms[j], a_min) for j, _ in _single_pairs],
+                    device=self.device, dtype=torch.float32,
+                )
+            #
+            if _cat_groups:
+                _cat_eff_denoms = [1.0 / max(init_norms[j], a_min) for j, _ in _cat_groups]
+            #
+        #
+
+        total_epochs = len(lambda_path) * self.epochs_per_batch
+
+        with tqdm(total=total_epochs) as pbar:
+            for lambda_b in lambda_path:
+                lb = float(lambda_b)
+                pbar.set_postfix({'lambda': f'{lb:.3g}'})
+                for _ in range(self.epochs_per_batch):
+                    y_pred = self.model(X_tensor)
+
+                    if a_min is None:
+                        # Differentiable group-lasso penalty — no proximal step needed.
+                        # Numeric groups: one vectorized op; categorical: small loop.
+                        w_inp = self.model.input_layer.weight
+                        penalty = w_inp.new_zeros(())
+                        if _num_cols is not None:
+                            penalty = penalty + (w_inp[:, _num_cols] ** 2).sum(dim=0).clamp(min=1e-12).sqrt().sum()
+                        for _, group_j in _cat_groups:
+                            penalty = penalty + (w_inp[:, group_j] ** 2).sum().clamp(min=1e-12).sqrt()
+                        loss = self.loss_func(y_pred.squeeze(1), y_tensor) + lb * penalty
+                    else:
+                        loss = self.loss_func(y_pred.squeeze(1), y_tensor)
+                    #
+
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    if a_min is not None:
+                        # Adaptive proximal step: vectorized for numeric, loop for categorical.
+                        with torch.no_grad():
+                            w = self.model.input_layer.weight.data
+                            if _num_cols is not None:
+                                w_cols = w[:, _num_cols]
+                                norms  = w_cols.norm(dim=0)
+                                eff    = lb * _num_eff_denom
+                                scales = (1.0 - eff / norms.clamp(min=1e-12)).clamp(min=0.0)
+                                w[:, _num_cols] = w_cols * scales
+                            #
+                            for k, (_, group_j) in enumerate(_cat_groups):
+                                v    = w[:, group_j]
+                                norm = v.norm()
+                                eff_lambda = lb * _cat_eff_denoms[k]
+                                if norm > eff_lambda:
+                                    w[:, group_j] = v * (1.0 - eff_lambda / norm)
+                                else:
+                                    w[:, group_j] = 0.0
+                            #/for categorical groups
+                        #/with no_grad
+                    #
+                    pbar.update(1)
+                #/for epochs_per_batch
+
+                if snapshot_fn is not None:
+                    snapshots.append(snapshot_fn(self, X_tensor))
+                else:
+                    snapshots.append(self.get_group_importances(groups))
+                #
+            #/for lambda_b
+        #/with tqdm
+
+        return snapshots
+    #/def fit
+
+    def get_group_importances(
+        self: Self,
+        groups: list[list[int]],
+    ) -> np.ndarray:
+        """Returns ||input_layer.weight[:, group_j]||_F for each group."""
+        with torch.no_grad():
+            w = self.model.input_layer.weight.detach().cpu()
+            return np.array([
+                torch.norm(w[:, group_j]).item() if group_j else 0.0
+                for group_j in groups
+            ])
+        #
+    #/def get_group_importances
+
+    def predict_t(
+        self: Self,
+        X_t: torch.Tensor,
+    ) -> torch.Tensor:
+        self.model.eval()
+        with torch.no_grad():
+            result = self.model( X_t )
+        #
+        self.model.train()
+        return result
+    #/def predict_t
+
+    def predict(
+        self: Self,
+        X: np.ndarray,
+    ) -> np.ndarray:
+        return self.predict_t(
+            torch.tensor(X, dtype=torch.float32).to(self.device)
+        ).cpu().numpy()
+    #/def predict
+
+    def auto_diff_t(
+        self: Self,
+        X_t: torch.Tensor,
+    ) -> torch.Tensor:
+        self.model.eval()
+        X_t = X_t.detach().requires_grad_( True )
+        y_pred = self.model( X_t )
+        grad = torch.autograd.grad(
+            outputs = y_pred,
+            inputs = X_t,
+            grad_outputs = torch.ones_like( y_pred ),
+        )
+        self.model.train()
+        return grad[0].detach()
+    #/def auto_diff_t
+
+    def auto_diff(
+        self: Self,
+        X: np.ndarray,
+    ) -> np.ndarray:
+        return self.auto_diff_t(
+            torch.tensor(X, dtype=torch.float32).to(self.device)
+        ).cpu().numpy()
+    #/def auto_diff
+#/class PRISMPredictionModel
