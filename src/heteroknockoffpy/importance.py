@@ -36,21 +36,56 @@ def _localGrad_forCategories_t(
     drop_first: bool,
     inv_cov_t: torch.Tensor | None = None,
     drop_first_y: bool = True,
+    ohe_vals: dict[ int, tuple[ float, float ] ] | None = None,
     ) -> torch.Tensor:
-    preds: list[ torch.Tensor ] = []
-    for h in range( len( j ) ):
-        _X = X_t.clone()
-        _X[:, j] = 0.0
-        _X[:, j[h]] = 1.0
-        preds.append( model.predict_t( _X ) )
+
+    local_grad: torch.Tensor
+
+    if ohe_vals is not None:
+        # Normalized plug-in: (f(active_h) - f(reference)) / spacing_h.
+        # Reference is always "all columns in j at norm0"; drop_first is irrelevant here
+        # because we never rely on it to define the reference — we compute it directly.
+        ref_X = X_t.clone()
+        for k in j:
+            ref_X[:, k] = ohe_vals[ k ][ 0 ]
+        ref_pred = model.predict_t( ref_X )                    # (n, output_dim)
+
+        scaled_diffs: list[ torch.Tensor ] = []
+        for h in range( len( j ) ):
+            act_X = X_t.clone()
+            for k in j:
+                act_X[:, k] = ohe_vals[ k ][ 0 ]
+            act_X[:, j[ h ] ] = ohe_vals[ j[ h ] ][ 1 ]
+            spacing_h = ohe_vals[ j[ h ] ][ 1 ] - ohe_vals[ j[ h ] ][ 0 ]
+            scaled_diffs.append( ( model.predict_t( act_X ) - ref_pred ) / spacing_h )
+        #
+
+        if len( scaled_diffs ) == 1:
+            local_grad = scaled_diffs[ 0 ]
+        else:
+            # Pick the category with the largest absolute derivative, preserving sign.
+            stack = torch.stack( scaled_diffs, dim=2 )         # (n, output_dim, len(j))
+            idx   = stack.abs().argmax( dim=2, keepdim=True )
+            local_grad = stack.gather( dim=2, index=idx ).squeeze( 2 )
+        #
+    else:
+        # Legacy unnormalized plug-in: evaluate at 0/1, return amax - amin across all states.
+        preds: list[ torch.Tensor ] = []
+        for h in range( len( j ) ):
+            _X = X_t.clone()
+            _X[:, j ] = 0.0
+            _X[:, j[ h ] ] = 1.0
+            preds.append( model.predict_t( _X ) )
+        #
+        if drop_first:
+            _X = X_t.clone()
+            _X[:, j ] = 0.0
+            preds.append( model.predict_t( _X ) )
+        #
+        y_out = torch.stack( preds, dim=2 )                    # (n, output_dim, n_cats)
+        local_grad = y_out.amax( dim=2 ) - y_out.amin( dim=2 )
     #
-    if drop_first:
-        _X = X_t.clone()
-        _X[:, j] = 0.0
-        preds.append( model.predict_t( _X ) )
-    #
-    y_out = torch.stack( preds, dim=2 )  # (n, output_dim, n_cats)
-    local_grad = y_out.amax( dim=2 ) - y_out.amin( dim=2 )  # (n, output_dim)
+
     if inv_cov_t is None:
         return local_grad.reshape( -1 )
     #
@@ -69,6 +104,7 @@ def _maldImportances_t(
     exponent: float,
     drop_first: bool = True,
     inv_cov_t: torch.Tensor | None = None,
+    cat_ohe_vals: dict[ int, tuple[ float, float ] ] | None = None,
     ) -> torch.Tensor:
     """
     Tensor-native MALD importance computation. Returns shape (p_out,) tensor.
@@ -109,6 +145,7 @@ def _maldImportances_t(
                 model = model,
                 drop_first = drop_first,
                 inv_cov_t = inv_cov_t,
+                ohe_vals = cat_ohe_vals,
             )
         #
     #
@@ -124,6 +161,7 @@ def _maldImportances_categorical_t(
     inv_cov_t: torch.Tensor,
     exponent: float,
     drop_first: bool = True,
+    cat_ohe_vals: dict[ int, tuple[ float, float ] ] | None = None,
     ) -> torch.Tensor:
     """
     PRISM-G importance for a categorical outcome via full Jacobian + Mahalanobis distance.
@@ -157,6 +195,7 @@ def _maldImportances_categorical_t(
                 model    = model,
                 drop_first = drop_first,
                 inv_cov_t  = inv_cov_t,
+                ohe_vals   = cat_ohe_vals,
             )
         #
     #
@@ -356,6 +395,20 @@ def prismGImportances(
         drop_first = drop_first,
     )
 
+    _mu = X_all_np.mean( axis=0 )
+    _sd = np.maximum( X_all_np.std( axis=0 ), 1e-8 )
+    X_all_np = ( X_all_np - _mu ) / _sd
+
+    cat_ohe_vals: dict[ int, tuple[ float, float ] ] = {}
+    for _col_idx in oheDict.values():
+        if not isinstance( _col_idx, int ):
+            for k in _col_idx:
+                cat_ohe_vals[ k ] = (
+                    float( ( 0.0 - _mu[ k ] ) / _sd[ k ] ),
+                    float( ( 1.0 - _mu[ k ] ) / _sd[ k ] ),
+                )
+    #
+
     predictionModel: torchImportances.PRISMPredictionModel = torchImportances.PRISMPredictionModel(
         input_size = X_all_np.shape[1],
         layers = list( layers ),
@@ -387,6 +440,7 @@ def prismGImportances(
                     inv_cov_t = inv_cov_t,
                     exponent = exponent,
                     drop_first = drop_first,
+                    cat_ohe_vals = cat_ohe_vals,
                 ).cpu().numpy()
             else:
                 return _maldImportances_t(
@@ -398,6 +452,7 @@ def prismGImportances(
                     exponent = exponent,
                     drop_first = drop_first,
                     inv_cov_t = inv_cov_t,
+                    cat_ohe_vals = cat_ohe_vals,
                 ).cpu().numpy()
             #
         #/def snapshot_fn
@@ -411,6 +466,7 @@ def prismGImportances(
                 bandwidth = bandwidth,
                 exponent = exponent,
                 drop_first = drop_first,
+                cat_ohe_vals = cat_ohe_vals,
             ).cpu().numpy()
         #/def snapshot_fn
     #
@@ -591,6 +647,20 @@ def rangerGiniImportances(
     )
 #/def rangerGiniImportances
 
+def _collapse_cat_importance(
+    coef: np.ndarray,
+    indices: tuple[int, ...],
+    col_name: str,
+) -> float:
+    idxlist = list(indices)
+    if not idxlist:
+        raise ValueError(
+            f"oheDict[{col_name!r}] is empty — categorical column has only 1 unique value "
+            "in the OHE design matrix. Ensure X and Xk have at least 2 distinct values per categorical column."
+        )
+    return max(np.max(coef[idxlist]), 0) - min(np.min(coef[idxlist]), 0)
+
+
 def lassoImportances(
     X: pl.DataFrame,
     Xk: pl.DataFrame,
@@ -651,6 +721,12 @@ def lassoImportances(
     if not np.isfinite( X_ohe ).all():
         raise ValueError(
             "OHE design matrix contains NaN or Inf — check knockoff generation for numerical instability."
+        )
+    _zero_var_cols = np.where( X_ohe.var( axis=0 ) == 0 )[0]
+    if _zero_var_cols.size:
+        raise ValueError(
+            f"OHE design matrix has {_zero_var_cols.size} zero-variance column(s) at indices "
+            f"{_zero_var_cols.tolist()} — check X/Xk for degenerate features."
         )
     #
 
@@ -790,18 +866,14 @@ def lassoImportances(
     # Collapse the ohe categories
     importances = np.fromiter(
         (
-            np.abs( lasso_coefficients[ oheDict[col] ] ) if isinstance( oheDict[col], int )\
-                else max(
-                    np.max( lasso_coefficients[ list( oheDict[col] ) ] ), 0,
-                ) - min(
-                    np.min( lasso_coefficients[ list( oheDict[col] ) ] ), 0,
-                )\
-                    for col in X_all_df.columns
-                #/
+            np.abs( lasso_coefficients[ oheDict[col] ] )
+            if isinstance( oheDict[col], int )
+            else _collapse_cat_importance( lasso_coefficients, oheDict[col], col )
+            for col in X_all_df.columns
         ),
         dtype = float,
     )**exponent
-        
+
     return importances
 #/def lassoImportances
 
@@ -858,6 +930,12 @@ def ridgeImportances(
     if not np.isfinite( X_ohe ).all():
         raise ValueError(
             "OHE design matrix contains NaN or Inf — check knockoff generation for numerical instability."
+        )
+    _zero_var_cols = np.where( X_ohe.var( axis=0 ) == 0 )[0]
+    if _zero_var_cols.size:
+        raise ValueError(
+            f"OHE design matrix has {_zero_var_cols.size} zero-variance column(s) at indices "
+            f"{_zero_var_cols.tolist()} — check X/Xk for degenerate features."
         )
     #
 
@@ -974,14 +1052,10 @@ def ridgeImportances(
 
     importances = np.fromiter(
         (
-            np.abs( ridge_coefficients[ oheDict[col] ] ) if isinstance( oheDict[col], int )\
-                else max(
-                    np.max( ridge_coefficients[ list( oheDict[col] ) ] ), 0,
-                ) - min(
-                    np.min( ridge_coefficients[ list( oheDict[col] ) ] ), 0,
-                )\
-                    for col in X_all_df.columns
-            #/
+            np.abs( ridge_coefficients[ oheDict[col] ] )
+            if isinstance( oheDict[col], int )
+            else _collapse_cat_importance( ridge_coefficients, oheDict[col], col )
+            for col in X_all_df.columns
         ),
         dtype = float,
     )**exponent
@@ -1066,6 +1140,12 @@ def elasticImportances(
     if not np.isfinite( X_ohe ).all():
         raise ValueError(
             "OHE design matrix contains NaN or Inf — check knockoff generation for numerical instability."
+        )
+    _zero_var_cols = np.where( X_ohe.var( axis=0 ) == 0 )[0]
+    if _zero_var_cols.size:
+        raise ValueError(
+            f"OHE design matrix has {_zero_var_cols.size} zero-variance column(s) at indices "
+            f"{_zero_var_cols.tolist()} — check X/Xk for degenerate features."
         )
     #
 
@@ -1162,14 +1242,10 @@ def elasticImportances(
 
     importances = np.fromiter(
         (
-            np.abs( elastic_coefficients[ oheDict[col] ] ) if isinstance( oheDict[col], int )\
-                else max(
-                    np.max( elastic_coefficients[ list( oheDict[col] ) ] ), 0,
-                ) - min(
-                    np.min( elastic_coefficients[ list( oheDict[col] ) ] ), 0,
-                )\
-                    for col in X_all_df.columns
-            #/
+            np.abs( elastic_coefficients[ oheDict[col] ] )
+            if isinstance( oheDict[col], int )
+            else _collapse_cat_importance( elastic_coefficients, oheDict[col], col )
+            for col in X_all_df.columns
         ),
         dtype = float,
     )**exponent

@@ -105,31 +105,34 @@ def get_ohe_forest_probabilities_np(
     )
     with open( _script_path ) as _f:
         _r_code: str = _f.read()
-    _ohe_probs = rpackages.STAP( _r_code, "ohe_probs" )
 
-    # -- Convert X to R data.frame
-    with (
-        ro.default_converter + pandas2ri.converter
-    ).context():
-        X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+    with ro.default_converter.context():
+        _ohe_probs = rpackages.STAP( _r_code, "ohe_probs" )
 
-    # -- Single R call: returns named list of n×k probability matrices
-    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
-        result_r = _ohe_probs.forest_ohe_probabilities(
-            X_r,
-            **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
-        )
-
-    # -- Extract probability matrices per categorical column
-    columns_dict: dict[ str, np.ndarray ] = {}
-    for col in list( result_r.names ):
-        _r_vec = result_r.rx2( col )
+        # -- Convert X to R data.frame
         with (
-            ro.default_converter + numpy2ri.converter
+            ro.default_converter + pandas2ri.converter
         ).context():
-            columns_dict[col] = np.asarray( _r_vec )
+            X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+
+        # -- Single R call: returns named list of n×k probability matrices
+        with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+            result_r = _ohe_probs.forest_ohe_probabilities(
+                X_r,
+                **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+            )
+
+        # -- Extract probability matrices per categorical column
+        columns_dict: dict[ str, np.ndarray ] = {}
+        for col in list( result_r.names ):
+            _r_vec = result_r.rx2( col )
+            with (
+                ro.default_converter + numpy2ri.converter
+            ).context():
+                columns_dict[col] = np.asarray( _r_vec )
 
     # -- Apply logit transform (with zero-handling) if requested
+    # (pure Python from here — outside the rpy2 context)
     if logit:
         for col in columns_dict:
             proba: np.ndarray = columns_dict[col]
@@ -200,31 +203,31 @@ def get_forest_conditional_expectations(
     )
     with open( _script_path ) as _f:
         _r_code: str = _f.read()
-    #
-    _cond_exp = rpackages.STAP( _r_code, "cond_exp" )
 
-    # -- Convert X to R data.frame
-    with (
-        ro.default_converter + pandas2ri.converter
-    ).context():
-        X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+    with ro.default_converter.context():
+        _cond_exp = rpackages.STAP( _r_code, "cond_exp" )
 
-    # -- Single R call: returns named list of per-column expectation vectors
-    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
-        result_r = _cond_exp.forest_conditional_expectations(
-            X_r,
-            **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
-        )
-
-    # -- Extract expectation vectors per numeric column
-    conditional_expectations_dict: dict[ str, np.ndarray ] = {}
-    for col in list( result_r.names ):
-        _r_vec = result_r.rx2( col )
+        # -- Convert X to R data.frame
         with (
-            ro.default_converter + numpy2ri.converter
+            ro.default_converter + pandas2ri.converter
         ).context():
-            conditional_expectations_dict[col] = np.asarray( _r_vec )
-        #/with (ro.default_converter + numpy2ri.converter)
+            X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+
+        # -- Single R call: returns named list of per-column expectation vectors
+        with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+            result_r = _cond_exp.forest_conditional_expectations(
+                X_r,
+                **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+            )
+
+        # -- Extract expectation vectors per numeric column
+        conditional_expectations_dict: dict[ str, np.ndarray ] = {}
+        for col in list( result_r.names ):
+            _r_vec = result_r.rx2( col )
+            with (
+                ro.default_converter + numpy2ri.converter
+            ).context():
+                conditional_expectations_dict[col] = np.asarray( _r_vec )
 
     return pl.DataFrame(
         conditional_expectations_dict,
@@ -270,39 +273,41 @@ def get_knockoffs_with_Xk_numeric(
     )
     with open( _script_path ) as _f:
         _r_code: str = _f.read()
-    _scip = rpackages.STAP( _r_code, "scip" )
 
     # -- Draw one integer seed from Python's Generator to seed R's RNG
     _seed: int = int( rng.integers( 1, 2**31 - 1 ) )
 
-    # -- Convert X to R data.frame (pandas2ri handles pl.Categorical -> R factor)
-    with (
-        ro.default_converter + pandas2ri.converter
-    ).context():
-        X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+    with ro.default_converter.context():
+        _scip = rpackages.STAP( _r_code, "scip" )
 
-    # -- Convert Xk_numeric to R matrix (positional, no column names needed)
-    with (
-        ro.default_converter + numpy2ri.converter
-    ).context():
-        Xk_numeric_r = ro.conversion.get_conversion().py2rpy(
-            Xk_numeric.astype( np.float64 )
-        )
+        # -- Convert X to R data.frame (pandas2ri handles pl.Categorical -> R factor)
+        with (
+            ro.default_converter + pandas2ri.converter
+        ).context():
+            X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
 
-    # -- Single R call: returns n x p data.frame of knockoffs
-    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
-        Xk_r = _scip.scip_knockoffs_with_numeric(
-            X           = X_r,
-            Xk_numeric  = Xk_numeric_r,
-            seed        = _seed,
-            **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
-        )
+        # -- Convert Xk_numeric to R matrix (positional, no column names needed)
+        with (
+            ro.default_converter + numpy2ri.converter
+        ).context():
+            Xk_numeric_r = ro.conversion.get_conversion().py2rpy(
+                Xk_numeric.astype( np.float64 )
+            )
 
-    # -- Convert R data.frame back to polars via pandas; pin dtypes to X.schema
-    with (
-        ro.default_converter + pandas2ri.converter
-    ).context():
-        Xk_pd: pd.DataFrame = ro.conversion.get_conversion().rpy2py( Xk_r )
+        # -- Single R call: returns n x p data.frame of knockoffs
+        with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+            Xk_r = _scip.scip_knockoffs_with_numeric(
+                X           = X_r,
+                Xk_numeric  = Xk_numeric_r,
+                seed        = _seed,
+                **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+            )
+
+        # -- Convert R data.frame back to polars via pandas; pin dtypes to X.schema
+        with (
+            ro.default_converter + pandas2ri.converter
+        ).context():
+            Xk_pd: pd.DataFrame = ro.conversion.get_conversion().rpy2py( Xk_r )
 
     return pl.from_pandas( Xk_pd ).cast(
         { col: dtype for col, dtype in X.schema.items() }
@@ -365,31 +370,33 @@ def get_knockoffs_SCIP(
     )
     with open( _script_path ) as _f:
         _r_code: str = _f.read()
-    _scip = rpackages.STAP( _r_code, "scip" )
 
     # -- Draw one integer seed from Python's Generator to seed R's RNG
     _seed: int = int( rng.integers( 1, 2**31 - 1 ) )
 
-    # -- Convert X to R data.frame (pandas2ri handles pl.Categorical -> R factor)
-    with (
-        ro.default_converter + pandas2ri.converter
-    ).context():
-        X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+    with ro.default_converter.context():
+        _scip = rpackages.STAP( _r_code, "scip" )
 
-    # -- Single R call: returns n x p data.frame of knockoffs
-    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
-        Xk_r = _scip.scip_knockoffs(
-            X                = X_r,
-            residuals_method = residuals_method,
-            seed             = _seed,
-            **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
-        )
+        # -- Convert X to R data.frame (pandas2ri handles pl.Categorical -> R factor)
+        with (
+            ro.default_converter + pandas2ri.converter
+        ).context():
+            X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
 
-    # -- Convert R data.frame back to polars via pandas; pin dtypes to X.schema
-    with (
-        ro.default_converter + pandas2ri.converter
-    ).context():
-        Xk_pd: pd.DataFrame = ro.conversion.get_conversion().rpy2py( Xk_r )
+        # -- Single R call: returns n x p data.frame of knockoffs
+        with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+            Xk_r = _scip.scip_knockoffs(
+                X                = X_r,
+                residuals_method = residuals_method,
+                seed             = _seed,
+                **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+            )
+
+        # -- Convert R data.frame back to polars via pandas; pin dtypes to X.schema
+        with (
+            ro.default_converter + pandas2ri.converter
+        ).context():
+            Xk_pd: pd.DataFrame = ro.conversion.get_conversion().rpy2py( Xk_r )
 
     return pl.from_pandas( Xk_pd ).cast(
         { col: dtype for col, dtype in X.schema.items() }
@@ -445,37 +452,39 @@ def rangerGiniImportances(
     
     w_stats_raw: np.ndarray
     with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
-        if outcomeDescriptor.outcome_type == 'categorical':
-            _y_series: pl.Series = y.to_series() if isinstance(y, pl.DataFrame) else y
-            y_r = ro.FactorVector(_y_series.cast(pl.Utf8).to_list())
-            with (
-                ro.default_converter + numpy2ri.converter
-            ).context():
-                w_stats_raw = rKnockoff.stat_random_forest(
-                    X = X_ohe,
-                    X_k = Xk_ohe,
-                    y = y_r,
-                    **kwargs,
+        with ro.default_converter.context():
+            if outcomeDescriptor.outcome_type == 'categorical':
+                _y_series: pl.Series = y.to_series() if isinstance(y, pl.DataFrame) else y
+                y_r = ro.FactorVector(_y_series.cast(pl.Utf8).to_list())
+                with (
+                    ro.default_converter + numpy2ri.converter
+                ).context():
+                    w_stats_raw = rKnockoff.stat_random_forest(
+                        X = X_ohe,
+                        X_k = Xk_ohe,
+                        y = y_r,
+                        **kwargs,
+                    )
+            else:
+                _y_np: np.ndarray = (
+                    y.to_numpy() if isinstance(y, np.ndarray)
+                    else y.to_numpy() if isinstance(y, pl.Series)
+                    else y.to_numpy().squeeze()
                 )
-        else:
-            _y_np: np.ndarray = (
-                y.to_numpy() if isinstance(y, np.ndarray)
-                else y.to_numpy() if isinstance(y, pl.Series)
-                else y.to_numpy().squeeze()
-            )
-            # rpy2 cannot convert unsigned integer dtypes
-            if np.issubdtype(_y_np.dtype, np.unsignedinteger):
-                _y_np = _y_np.astype(np.int64)
-            with (
-                ro.default_converter + numpy2ri.converter
-            ).context():
-                w_stats_raw = rKnockoff.stat_random_forest(
-                    X = X_ohe,
-                    X_k = Xk_ohe,
-                    y = _y_np,
-                    **kwargs,
-                )
-        #/if categorical/else
+                # rpy2 cannot convert unsigned integer dtypes
+                if np.issubdtype(_y_np.dtype, np.unsignedinteger):
+                    _y_np = _y_np.astype(np.int64)
+                with (
+                    ro.default_converter + numpy2ri.converter
+                ).context():
+                    w_stats_raw = rKnockoff.stat_random_forest(
+                        X = X_ohe,
+                        X_k = Xk_ohe,
+                        y = _y_np,
+                        **kwargs,
+                    )
+            #/if categorical/else
+        #/with ro.default_converter
     #/with _r_warnings_to_stdout
 
     # Take max from categorical OHE columns, others literally
