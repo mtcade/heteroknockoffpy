@@ -1,6 +1,6 @@
 # heteroknockoffpy
 
-Knockoffs and MALD importances for heterogeneous (mixed numeric/categorical) data, using conditional residuals and random forests.
+Knockoffs and PRISM importances for heterogeneous (mixed numeric/categorical) data, using conditional residuals and random forests.
 
 ---
 
@@ -10,7 +10,7 @@ Knockoffs and MALD importances for heterogeneous (mixed numeric/categorical) dat
 pip install heteroknockoffpy
 ```
 
-Ranger-based methods require R and `rpy2`. Install the `ranger` R package before using `rangerMaldImportances` or `categorical_method='forest'`.
+`categorical_method='forest'` requires R and `rpy2`. Install the `ranger` R package before using it.
 
 ---
 
@@ -70,61 +70,49 @@ If `conditional_expectations=None` (the default) and `categorical_method='scip'`
 
 All importance functions return a `np.ndarray` of length `2p` — scores for `[x_1, …, x_p, x̃_1, …, x̃_p]`. Use `wFromImportances` to convert these to knockoff W-statistics for variable selection.
 
-### PyTorch / TF model — `maldImportancesFromModel`
+Both PRISM functions train a single MLP on `[X, Xk]` while sweeping a lambda regularization path. At the end of each lambda stage a snapshot of importances is recorded; the returned importances are the mean across all snapshots. The regularization path defaults to `logspace(1, -2, 50)`; pass `lambda_path` and/or `a_path` to override. `epochs` is distributed evenly across stages.
+
+### PRISM-W — `prismWImportances`
+
+Records first-layer column norms `‖W[:,j]‖₂` at each lambda stage. Fast — no extra forward passes per snapshot.
 
 ```python
-from heteroknockoffpy.importance import maldImportancesFromModel
+from heteroknockoffpy.importance import prismWImportances
 
-imp = maldImportancesFromModel(
-    model=my_torch_model,   # any PredictionModel with autodiff support
-    X=X,
-    Xk=Xk,
-    y=y,
-    outcome_type="continuous",       # "continuous" | "count" | "categorical" | None (inferred)
-    local_grad_method="auto_diff",   # "auto_diff" | "bandwidth"
-    bandwidth=None,                  # only used if local_grad_method="bandwidth"
-    exponent=1.0,
-)
-```
-
-### Built-in feedforward net — `torchMaldImportances`
-
-```python
-from heteroknockoffpy.importance import torchMaldImportances
-
-imp = torchMaldImportances(
+imp = prismWImportances(
     X=X, Xk=Xk, y=y,
     layers=[64, 32],
+    outcome_type="continuous",   # "continuous" | "count" | "categorical" | None (inferred)
+    model_type="mlp",            # "mlp" | "pairwise" | "additive"
     epochs=500,
 )
 ```
 
-### R ranger forest — `rangerMaldImportances`
+### PRISM-G — `prismGImportances`
+
+Records per-feature output sensitivity `φⱼ = mean|ŷ(x+σeⱼ) − ŷ(x−σeⱼ)| / 2σ` at each lambda stage. More directly tied to the model's predictions than PRISM-W, but requires extra forward passes per snapshot.
 
 ```python
-from heteroknockoffpy.rbridge import rangerMaldImportances
+from heteroknockoffpy.importance import prismGImportances
 
-imp = rangerMaldImportances(
+imp = prismGImportances(
     X=X, Xk=Xk, y=y,
+    layers=[64, 32],
     outcome_type="continuous",
-    bandwidth=1.0,
-    bandwidth_exponent=0.2,
+    local_grad_method="auto_diff",  # "auto_diff" | "bandwidth"
+    bandwidth=None,                 # only used when local_grad_method="bandwidth"
+    model_type="mlp",
+    epochs=500,
 )
 ```
 
-### Bandwidth parameters
+### `model_type`
 
-MALD approximates `∂ŷ/∂x_j` by finite difference:
-
-```
-(ŷ(x + h·eⱼ) − ŷ(x)) / h
-```
-
-- **`bandwidth`** — the absolute step size `h`. Smaller values give a more local derivative at the cost of higher variance; larger values smooth more but can miss sharp nonlinearities. When `local_grad_method='bandwidth'` in `maldImportancesFromModel`, `None` defaults to `n^{-0.2}`.
-
-- **`bandwidth_exponent`** — used by `rangerMaldImportances` to scale `h` relative to sample size: effective `h = bandwidth × n^{-bandwidth_exponent}`. The default `0.2` implements the standard nonparametric `n^{-1/5}` rule.
-
-When autodiff is available (`local_grad_method='auto_diff'`), both bandwidth parameters are ignored and the exact gradient is used instead.
+| value | behavior |
+|---|---|
+| `'mlp'` | Standard MLP on `[X, Xk]` with group regularization on first-layer columns |
+| `'pairwise'` | Adds a learnable filter that creates convex combinations of `xⱼ` and `x̃ⱼ`, forcing explicit per-feature competition |
+| `'additive'` | Feature-wise sub-networks with separate group regularization for `X` and `Xk` channels |
 
 ---
 
