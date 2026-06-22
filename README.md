@@ -1,6 +1,8 @@
 # heteroknockoffpy
 
-Knockoffs and PRISM importances for heterogeneous (mixed numeric/categorical) data, using conditional residuals and random forests.
+Knockoffs and importance measures for heterogeneous (mixed numeric/categorical) data, using conditional residuals and random forests.
+
+Based on the knockoff filter framework ([Candès et al., 2018](https://academic.oup.com/jrsssb/article/80/3/551/7048447)).
 
 ---
 
@@ -10,7 +12,7 @@ Knockoffs and PRISM importances for heterogeneous (mixed numeric/categorical) da
 pip install heteroknockoffpy
 ```
 
-`categorical_method='forest'` requires R and `rpy2`. Install the `ranger` R package before using it.
+`categorical_method='forest'` and `method='SCIP'` require R and `rpy2`. Install the `ranger` and `rangerKnockoff` R packages before using them.
 
 ---
 
@@ -25,15 +27,23 @@ rng = np.random.default_rng(0)
 # X is a polars DataFrame; categorical columns must have dtype pl.Categorical
 Xk = knockoff.get_knockoffs(
     X,
-    method="second_order",   # "second_order" | "GAN" | "GAN_torch" | "SCIP"
+    method="second_order",   # "second_order" | "GAN_torch" | "SCIP"
     rng=rng,
     categorical_method="forest",
 )
 ```
 
+### `method`
+
+| value | behavior |
+|---|---|
+| `'second_order'` | Matches the first two moments (mean and covariance) of X. Fast and closed-form via the R `knockoff` package. Works well when the joint distribution is approximately Gaussian; may lose power in strongly non-linear settings. |
+| `'GAN_torch'` | Trains a GAN in PyTorch to learn the full joint distribution of X and generate knockoffs that are indistinguishable from it. Slower than second-order but can capture non-Gaussian and non-linear dependence structures. |
+| `'SCIP'` | Sorted L1 Penalized Inference knockoffs via the `rangerKnockoff` R package. Fits a ranger random forest per column to estimate conditional distributions, then generates knockoffs from those conditional models. The most statistically principled method for non-parametric joint distributions. |
+
 ### `categorical_method`
 
-Controls how categorical columns are encoded before knockoffs are generated.
+Controls how categorical columns are encoded before knockoffs are generated. Not applicable when `method='SCIP'` (which handles categoricals natively).
 
 | value | behavior |
 |---|---|
@@ -54,10 +64,10 @@ from heteroknockoffpy import rbridge
 # compute once, reuse across multiple knockoff draws
 ce = rbridge.get_forest_conditional_expectations(X)
 
-Xk1 = knockoff.get_knockoffs(X, method="GAN", rng=rng,
+Xk1 = knockoff.get_knockoffs(X, method="GAN_torch", rng=rng,
                                categorical_method="scip",
                                conditional_expectations=ce)
-Xk2 = knockoff.get_knockoffs(X, method="GAN", rng=rng,
+Xk2 = knockoff.get_knockoffs(X, method="GAN_torch", rng=rng,
                                categorical_method="scip",
                                conditional_expectations=ce)
 ```
@@ -70,11 +80,9 @@ If `conditional_expectations=None` (the default) and `categorical_method='scip'`
 
 All importance functions return a `np.ndarray` of length `2p` — scores for `[x_1, …, x_p, x̃_1, …, x̃_p]`. Use `wFromImportances` to convert these to knockoff W-statistics for variable selection.
 
-Both PRISM functions train a single MLP on `[X, Xk]` while sweeping a lambda regularization path. At the end of each lambda stage a snapshot of importances is recorded; the returned importances are the mean across all snapshots. The regularization path defaults to `logspace(1, -2, 50)`; pass `lambda_path` and/or `a_path` to override. `epochs` is distributed evenly across stages.
-
 ### PRISM-W — `prismWImportances`
 
-Records first-layer column norms `‖W[:,j]‖₂` at each lambda stage. Fast — no extra forward passes per snapshot.
+Trains a single MLP on `[X, Xk]` while sweeping a lambda regularization path. Records first-layer column norms `‖W[:,j]‖₂` at the end of each lambda stage; the returned importances are the mean across all snapshots. Fast — no extra forward passes per snapshot.
 
 ```python
 from heteroknockoffpy.importance import prismWImportances
@@ -90,7 +98,7 @@ imp = prismWImportances(
 
 ### PRISM-G — `prismGImportances`
 
-Records per-feature output sensitivity `φⱼ = mean|ŷ(x+σeⱼ) − ŷ(x−σeⱼ)| / 2σ` at each lambda stage. More directly tied to the model's predictions than PRISM-W, but requires extra forward passes per snapshot.
+Same training procedure as PRISM-W. Records per-feature output sensitivity `φⱼ = mean|ŷ(x+σeⱼ) − ŷ(x−σeⱼ)| / 2σ` at each lambda stage. More directly tied to the model's predictions than PRISM-W, but requires extra forward passes per snapshot.
 
 ```python
 from heteroknockoffpy.importance import prismGImportances
@@ -106,7 +114,65 @@ imp = prismGImportances(
 )
 ```
 
-### `model_type`
+The regularization path defaults to `logspace(1, -2, 50)`; pass `lambda_path` and/or `a_path` to override. `epochs` is distributed evenly across stages.
+
+### Lasso — `lassoImportances`
+
+Fits a penalized linear model on `[X, Xk]` and uses absolute coefficient values as importances. Cross-validates the regularization strength automatically. Fast and interpretable; best when the outcome-feature relationship is approximately linear.
+
+- continuous: `LassoCV` (sklearn)
+- count: `PoissonLassoCV` (L1-penalized Poisson GLM)
+- categorical: `LogisticRegressionCV` with L1 penalty (SAGA solver)
+
+```python
+from heteroknockoffpy.importance import lassoImportances
+
+imp = lassoImportances(X=X, Xk=Xk, y=y, outcome_type="continuous")
+```
+
+### Ridge — `ridgeImportances`
+
+Same as `lassoImportances` but with L2 regularization. Coefficients are shrunk but not zeroed, so all features retain non-zero importance. Useful when many features are expected to have small true effects.
+
+- continuous: `RidgeCV` (sklearn)
+- count: `PoissonRegressor` via `GridSearchCV` (neg Poisson deviance scoring)
+- categorical: `LogisticRegressionCV` with L2 penalty (LBFGS solver)
+
+```python
+from heteroknockoffpy.importance import ridgeImportances
+
+imp = ridgeImportances(X=X, Xk=Xk, y=y, outcome_type="continuous")
+```
+
+### Elastic Net — `elasticImportances`
+
+Interpolates between Lasso and Ridge via `l1_ratio` (0 = Ridge, 1 = Lasso). Useful when there are groups of correlated features — the L2 component keeps them together while L1 performs selection.
+
+- continuous: `ElasticNetCV` (sklearn)
+- count: `PoissonLassoCV` with `L1_wt=l1_ratio`
+- categorical: `LogisticRegressionCV` with `penalty='elasticnet'`
+
+```python
+from heteroknockoffpy.importance import elasticImportances
+
+imp = elasticImportances(X=X, Xk=Xk, y=y, outcome_type="continuous", l1_ratio=0.5)
+```
+
+Delegates to `lassoImportances` when `l1_ratio=1` and to `ridgeImportances` when `l1_ratio=0`.
+
+### Random Forest Gini — `rangerGiniImportances`
+
+Fits a ranger random forest on `[X, Xk]` and returns variable importances based on mean decrease in node impurity (Gini importance). Non-parametric and robust to non-linearities; no hyperparameter tuning required.
+
+```python
+from heteroknockoffpy.importance import rangerGiniImportances
+
+imp = rangerGiniImportances(X=X, Xk=Xk, y=y, outcome_type="continuous")
+```
+
+Requires R and `rpy2` with the `ranger` package installed.
+
+### `model_type` (PRISM only)
 
 | value | behavior |
 |---|---|
