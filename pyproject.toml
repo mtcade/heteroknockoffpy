@@ -1,6 +1,6 @@
 [project]
 name = "heteroknockoffpy"
-version = "0.1.0"
+version = "0.1.1"
 description = "Knockoffs and importances for heterogeneous data with conditional residuals and random forests"
 readme = "README.md"
 authors = [
