@@ -11,6 +11,8 @@ from .utilities import OutcomeDescriptor
 import os
 os.environ["RPY2_CFFI_MODE"] = "ABI"
 
+from importlib.resources import files as _pkg_files
+
 import polars as pl
 import pandas as pd
 import numpy as np
@@ -96,15 +98,7 @@ def get_ohe_forest_probabilities_np(
         per call via rpy2.robjects.packages.STAP.
     """
     # -- Load R script via STAP
-    _script_path: str = os.path.normpath(
-        os.path.join(
-            os.path.dirname( os.path.abspath( __file__ ) ),
-            '..', '..', 'scripts',
-            'forest.ohe_probabilities.R',
-        )
-    )
-    with open( _script_path ) as _f:
-        _r_code: str = _f.read()
+    _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("forest.ohe_probabilities.R").read_text()
 
     with ro.default_converter.context():
         _ohe_probs = rpackages.STAP( _r_code, "ohe_probs" )
@@ -194,15 +188,7 @@ def get_forest_conditional_expectations(
         :returns: DataFrame with non-categorical columns of X replaced by their conditional expectations
     """
     # -- Load R script via STAP
-    _script_path: str = os.path.normpath(
-        os.path.join(
-            os.path.dirname( os.path.abspath( __file__ ) ),
-            '..', '..', 'scripts',
-            'forest.conditional_expectations.R',
-        )
-    )
-    with open( _script_path ) as _f:
-        _r_code: str = _f.read()
+    _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("forest.conditional_expectations.R").read_text()
 
     with ro.default_converter.context():
         _cond_exp = rpackages.STAP( _r_code, "cond_exp" )
@@ -264,15 +250,7 @@ def get_knockoffs_with_Xk_numeric(
     assert len( numeric_columns ) == Xk_numeric.shape[1]
 
     # -- Load R script via STAP
-    _script_path: str = os.path.normpath(
-        os.path.join(
-            os.path.dirname( os.path.abspath( __file__ ) ),
-            '..', '..', 'scripts',
-            'scip.knockoffs.R',
-        )
-    )
-    with open( _script_path ) as _f:
-        _r_code: str = _f.read()
+    _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("scip.knockoffs.R").read_text()
 
     # -- Draw one integer seed from Python's Generator to seed R's RNG
     _seed: int = int( rng.integers( 1, 2**31 - 1 ) )
@@ -361,15 +339,7 @@ def get_knockoffs_SCIP(
         :param kwargs: Passed to r ranger::ranger
     """
     # -- Load R script via STAP
-    _script_path: str = os.path.normpath(
-        os.path.join(
-            os.path.dirname( os.path.abspath( __file__ ) ),
-            '..', '..', 'scripts',
-            'scip.knockoffs.R',
-        )
-    )
-    with open( _script_path ) as _f:
-        _r_code: str = _f.read()
+    _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("scip.knockoffs.R").read_text()
 
     # -- Draw one integer seed from Python's Generator to seed R's RNG
     _seed: int = int( rng.integers( 1, 2**31 - 1 ) )

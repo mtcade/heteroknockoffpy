@@ -1,6 +1,6 @@
 [project]
 name = "heteroknockoffpy"
-version = "0.1.1"
+version = "0.1.2"
 description = "Knockoffs and importances for heterogeneous data with conditional residuals and random forests"
 readme = "README.md"
 authors = [
@@ -25,7 +25,6 @@ license-files = ["LICENSE"]
 [build-system]
 requires = ["uv_build>=0.11.23,<0.12"]
 build-backend = "uv_build"
-
 
 [dependency-groups]
 dev = [

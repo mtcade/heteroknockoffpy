@@ -207,7 +207,7 @@ wheels = [
 
 [[package]]
 name = "heteroknockoffpy"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "knockpy" },
