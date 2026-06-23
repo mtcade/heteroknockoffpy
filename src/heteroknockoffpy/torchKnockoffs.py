@@ -5,6 +5,7 @@
 #//  Created by Evan Mason on 6/1/26.
 #//
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim

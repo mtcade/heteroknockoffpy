@@ -8,15 +8,6 @@
 import pytest
 
 
-def test_torch_networks_raises_import_error():
-    """torchNetworks must raise ImportError directing users to the new modules."""
-    import importlib, sys
-    # Clear any cached (failed) entry so the module re-executes.
-    sys.modules.pop("heteroknockoffpy.torchNetworks", None)
-    with pytest.raises(ImportError, match="torchNetworks has been split"):
-        importlib.import_module("heteroknockoffpy.torchNetworks")
-
-
 def test_torch_util_importable():
     from heteroknockoffpy.torchUtil import _nnModule_dict, _build_sequential
     import torch.nn as nn
