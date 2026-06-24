@@ -489,6 +489,7 @@ class PRISMPredictionModel:
 
         with tqdm(total=self.epochs) as pbar:
             for stage_idx, lambda_b in enumerate(lambda_path):
+                optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
                 lb  = float(lambda_b)
                 a_b = _a_path[stage_idx] if _a_path is not None else lb
                 pbar.set_postfix({'lambda': f'{lb:.3g}'})

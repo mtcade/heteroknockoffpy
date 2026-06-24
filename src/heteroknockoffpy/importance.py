@@ -327,6 +327,10 @@ def prismWImportances(
         drop_first = drop_first,
     )
 
+    _mu = X_all_np.mean( axis=0 )
+    _sd = np.maximum( X_all_np.std( axis=0 ), 1e-8 )
+    X_all_np = ( X_all_np - _mu ) / _sd
+
     predictionModel: torchImportances.PRISMPredictionModel = torchImportances.PRISMPredictionModel(
         input_size = X_all_np.shape[1],
         layers = list( layers ),
