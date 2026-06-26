@@ -462,14 +462,14 @@ def rangerGiniImportances(
 #/def rangerGiniImportances
 
 
-_MALD_SCRIPTS: dict[ str, tuple[ str, str ] ] = {
-    'continuous': ( 'stat.forest.mald_continuous.R',  'stat_forest_mald_continuous'  ),
-    'count':      ( 'stat.forest.mald_count.R',       'stat_forest_mald_count'       ),
-    'categorical':( 'stat.forest.mald_categorical.R', 'stat_forest_mald_categorical' ),
+_PRISM_SCRIPTS: dict[ str, tuple[ str, str ] ] = {
+    'continuous': ( 'stat.forest.prism_continuous.R',  'stat_forest_prism_continuous'  ),
+    'count':      ( 'stat.forest.prism_count.R',       'stat_forest_prism_count'       ),
+    'categorical':( 'stat.forest.prism_categorical.R', 'stat_forest_prism_categorical' ),
 }
 
 
-def rangerMaldImportances(
+def rangerPrismImportances(
     X: DataFrameLike,
     Xk: DataFrameLike,
     y: SeriesOrDataFrameLike,
@@ -479,7 +479,7 @@ def rangerMaldImportances(
     **kwargs,
     ) -> np.ndarray:
     """
-        MALD (Mean Absolute Local Derivative) importances via a ranger forest.
+        PRISM importances via a ranger forest.
 
         Fits a single ranger forest on [X, Xk] → y using the appropriate
         script for the outcome type, then returns a (2p,) array of mean
@@ -489,12 +489,12 @@ def rangerMaldImportances(
         Factor predictors:  max-minus-min sweep across predictor levels.
         Categorical outcome: Mahalanobis norm of log-probability contrasts.
 
-        :param kwargs: Passed to ranger::ranger via stat_forest_mald_*
+        :param kwargs: Passed to ranger::ranger via stat_forest_prism_*
     """
     if not isinstance( X, pl.DataFrame ):
-        raise NotImplementedError( "Path input not supported for rangerMaldImportances; X must be a pl.DataFrame" )
+        raise NotImplementedError( "Path input not supported for rangerPrismImportances; X must be a pl.DataFrame" )
     if not isinstance( Xk, pl.DataFrame ):
-        raise NotImplementedError( "Path input not supported for rangerMaldImportances; Xk must be a pl.DataFrame" )
+        raise NotImplementedError( "Path input not supported for rangerPrismImportances; Xk must be a pl.DataFrame" )
     y = _resolve_y( y )
     outcomeDescriptor: OutcomeDescriptor = OutcomeDescriptor.infer(
         y = y,
@@ -505,11 +505,11 @@ def rangerMaldImportances(
         raise TypeError( "Joint outcomes unavailable" )
 
     ot = outcomeDescriptor.outcome_type
-    if ot not in _MALD_SCRIPTS:
+    if ot not in _PRISM_SCRIPTS:
         raise ValueError(
             "Unrecognized outcomeDescriptor.outcome_type='{}'".format( ot )
         )
-    _script, _fn = _MALD_SCRIPTS[ ot ]
+    _script, _fn = _PRISM_SCRIPTS[ ot ]
 
     X_all: pl.DataFrame = pl.concat(
         (
@@ -524,7 +524,7 @@ def rangerMaldImportances(
     importances: np.ndarray
     with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
         with ro.default_converter.context():
-            _mald = rpackages.STAP( _r_code, _script )
+            _prism = rpackages.STAP( _r_code, _script )
 
             with (
                 ro.default_converter + pandas2ri.converter
@@ -541,7 +541,7 @@ def rangerMaldImportances(
                 )
                 y_r = ro.FloatVector( _y_arr.astype( np.float64 ).tolist() )
 
-            result_r = getattr( _mald, _fn )(
+            result_r = getattr( _prism, _fn )(
                 X_all_r, y_r,
                 **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
             )
@@ -552,4 +552,4 @@ def rangerMaldImportances(
                 importances = np.asarray( result_r )
 
     return importances
-#/def rangerMaldImportances
+#/def rangerPrismImportances

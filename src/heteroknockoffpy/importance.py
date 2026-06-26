@@ -95,7 +95,7 @@ def _localGrad_forCategories_t(
 #/def _localGrad_forCategories_t
 
 
-def _maldImportances_t(
+def _prismImportances_t(
     model: 'object',
     X_all_t: torch.Tensor,
     oheDict: dict,
@@ -107,7 +107,7 @@ def _maldImportances_t(
     cat_ohe_vals: dict[ int, tuple[ float, float ] ] | None = None,
     ) -> torch.Tensor:
     """
-    Tensor-native MALD importance computation. Returns shape (p_out,) tensor.
+    Tensor-native PRISM importance computation. Returns shape (p_out,) tensor.
     model must have predict_t and auto_diff_t methods.
     """
     n = X_all_t.shape[0]
@@ -151,10 +151,10 @@ def _maldImportances_t(
     #
 
     return ( torch.abs( localGrad_t ) ** exponent ).mean( dim=0 )
-#/def _maldImportances_t
+#/def _prismImportances_t
 
 
-def _maldImportances_categorical_t(
+def _prismImportances_categorical_t(
     model: 'object',
     X_all_t: torch.Tensor,
     oheDict: dict,
@@ -201,7 +201,7 @@ def _maldImportances_categorical_t(
     #
 
     return ( localGrad_t ** exponent ).mean( dim=0 )
-#/def _maldImportances_categorical_t
+#/def _prismImportances_categorical_t
 
 
 def _prism_setup(
@@ -380,11 +380,11 @@ def prismGImportances(
     verbose: int = 0,
     ) -> np.ndarray:
     """
-    PRISM-G importances: average of MALD local-gradient snapshots over a lambda path.
+    PRISM-G importances: average of PRISM local-gradient snapshots over a lambda path.
 
     Same training procedure as prismWImportances; at the end of each lambda stage the
-    MALD importances (auto_diff or bandwidth) of the current model are recorded.
-    Delegates snapshot computation to _maldImportances_t.
+    PRISM importances (auto_diff or bandwidth) of the current model are recorded.
+    Delegates snapshot computation to _prismImportances_t.
 
     :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite difference).
     :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
@@ -441,7 +441,7 @@ def prismGImportances(
                 inv_cov_t = torch.linalg.inv( _cov )
             #
             if local_grad_method == 'auto_diff':
-                return _maldImportances_categorical_t(
+                return _prismImportances_categorical_t(
                     model = model,
                     X_all_t = X_t,
                     oheDict = oheDict,
@@ -451,7 +451,7 @@ def prismGImportances(
                     cat_ohe_vals = cat_ohe_vals,
                 ).cpu().numpy()
             else:
-                return _maldImportances_t(
+                return _prismImportances_t(
                     model = model,
                     X_all_t = X_t,
                     oheDict = oheDict,
@@ -466,7 +466,7 @@ def prismGImportances(
         #/def snapshot_fn
     else:
         def snapshot_fn( model: torchImportances.PRISMPredictionModel, X_t: torch.Tensor ) -> np.ndarray:
-            return _maldImportances_t(
+            return _prismImportances_t(
                 model = model,
                 X_all_t = X_t,
                 oheDict = oheDict,
@@ -654,7 +654,7 @@ def rangerGiniImportances(
 #/def rangerGiniImportances
 
 
-def rangerMaldImportances(
+def rangerPrismImportances(
     X: DataFrameLike,
     Xk: DataFrameLike,
     y: SeriesOrDataFrameLike,
@@ -663,7 +663,7 @@ def rangerMaldImportances(
     **kwargs,
     ) -> np.ndarray:
     from . import rbridge
-    return rbridge.rangerMaldImportances(
+    return rbridge.rangerPrismImportances(
         X = X,
         Xk = Xk,
         y = y,
@@ -671,7 +671,7 @@ def rangerMaldImportances(
         verbose = verbose,
         **kwargs,
     )
-#/def rangerMaldImportances
+#/def rangerPrismImportances
 
 def _collapse_cat_importance(
     coef: np.ndarray,

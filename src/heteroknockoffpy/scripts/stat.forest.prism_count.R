@@ -1,33 +1,48 @@
-# stat.forest.mald_continuous.R
+# stat.forest.prism_count.R
 #
-# Continuous-outcome MALD importance using a ranger regression forest.
+# Count-outcome PRISM importance using a ranger regression forest.
 #
-# For each predictor column the local gradient of the predicted value is
-# computed, which is the natural scale for continuous outcomes.
+# For each predictor column the local gradient of the log expected value is
+# computed (log of ranger regression predictions), which is the natural scale
+# for multiplicative count models.
 #
 # Predictor handling:
-#   Numeric  — bandwidth finite-difference of predicted value
-#   Factor   — max-minus-min sweep across predictor levels of predicted value
+#   Numeric  — bandwidth finite-difference of log-predicted-value
+#   Factor   — max-minus-min sweep across predictor levels in log-predicted-value
 #
 # Usage via rpy2:
-#   pkg <- rpy2.robjects.packages.STAP( r_code_string, "mald_continuous" )
-#   importances <- pkg.stat_forest_mald_continuous( X_all, y, ... )
+#   pkg <- rpy2.robjects.packages.STAP( r_code_string, "prism_count" )
+#   importances <- pkg.stat_forest_prism_count( X_all, y, ... )
 #
 # Note: rpy2 converts Python underscore kwargs to R dot params, so
 #   bandwidth_exponent=0.2  ->  bandwidth.exponent = 0.2  in R.
 
+# -- Private helper
 
-#' Continuous-outcome MALD importance (regression forest)
+.prism_count.unzero <- function( vec ){
+    # Replace zero (or negative) predicted values with the minimum positive value
+    # before taking logs, to avoid -Inf.
+    pos <- vec[ vec > 0 ]
+    if ( length( pos ) == 0 ) return( rep( 1e-10, length( vec ) ) )
+    min_pos <- min( pos )
+    vec[ vec <= 0 ] <- min_pos
+    vec
+}
+
+
+# -- Main function
+
+#' Count-outcome PRISM importance (regression forest on log expected value)
 #'
 #' @param X_all   n x 2p data.frame: original X and knockoff X_k concatenated column-wise.
-#' @param y       Numeric vector of length n giving the continuous outcome.
+#' @param y       Numeric (integer) vector of length n giving the count outcome.
 #' @param bandwidth       Scale multiplier for numeric bandwidth (multiplied by sd(col)/n^exponent).
 #' @param bandwidth.exponent  Exponent of sample size in bandwidth denominator.
 #' @param exponent  Power applied to each pointwise absolute importance before averaging.
 #' @param verbose   Print progress every `verbose` columns (0 = silent).
 #' @param ...   Additional arguments forwarded to ranger::ranger.
-#' @return Numeric vector of length 2p: mean absolute importances.
-stat.forest.mald_continuous <- function(
+#' @return Numeric vector of length 2p: mean absolute log-gradient importances.
+stat.forest.prism_count <- function(
     X_all,
     y,
     bandwidth           = 1,
@@ -55,16 +70,17 @@ stat.forest.mald_continuous <- function(
         ranger::ranger,
         c(
             list(
-                x           = X_all,
-                y           = y,
+                x         = X_all,
+                y         = y,
                 probability = FALSE
             ),
             vargs
         )
     )
 
-    # -- Base predictions  (n,)
+    # -- Base log-expected-value predictions  (n,)
     base.preds <- predict( forest, data = X_all )$predictions
+    base.log   <- log( .prism_count.unzero( base.preds ) )
 
     # -- Per-column bandwidths for numeric predictors
     bandwidths <- vapply(
@@ -79,7 +95,7 @@ stat.forest.mald_continuous <- function(
     for ( j in seq_len( p_all ) ){
         if ( verbose > 0 && j %% verbose == 0 ){
             message( sprintf(
-                "stat.forest.mald_continuous: column %d / %d", j, p_all
+                "stat.forest.prism_count: column %d / %d", j, p_all
             ) )
         }
 
@@ -87,28 +103,32 @@ stat.forest.mald_continuous <- function(
             # -- Factor predictor: sweep over levels
             x.levels  <- levels( X_all[[ j ]] )
             k_x       <- length( x.levels )
-            preds_mat <- matrix( 0.0, nrow = n, ncol = k_x )
+            log_preds <- matrix( 0.0, nrow = n, ncol = k_x )
 
             for ( ki in seq_len( k_x ) ){
                 X.test        <- X_all
                 X.test[[ j ]] <- x.levels[[ ki ]]   # recycled to all n rows
-                preds_mat[ , ki ] <- predict( forest, data = X.test )$predictions
+                preds         <- predict( forest, data = X.test )$predictions
+                log_preds[ , ki ] <- log( .prism_count.unzero( preds ) )
             }
 
             # Max-minus-min across predictor levels
             importances_pointwise[ , j ] <-
-                apply( preds_mat, 1, max ) - apply( preds_mat, 1, min )
+                apply( log_preds, 1, max ) - apply( log_preds, 1, min )
 
         } else {
-            # -- Numeric predictor: bandwidth finite difference
+            # -- Numeric predictor: bandwidth finite difference of log-predictions
             bw <- bandwidths[ j ]
             if ( bw == 0 ) next   # zero-variance column; importance stays 0
 
             X.test        <- X_all
             X.test[[ j ]] <- X_all[[ j ]] + bw
 
-            importances_pointwise[ , j ] <-
-                ( predict( forest, data = X.test )$predictions - base.preds ) / bw
+            mod.log <- log( .prism_count.unzero(
+                predict( forest, data = X.test )$predictions
+            ) )
+
+            importances_pointwise[ , j ] <- ( mod.log - base.log ) / bw
         }
     }
 

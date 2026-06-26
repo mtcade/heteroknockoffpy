@@ -1,6 +1,6 @@
-# stat.forest.mald_categorical.R
+# stat.forest.prism_categorical.R
 #
-# Categorical-outcome MALD importance using a ranger probability forest.
+# Categorical-outcome PRISM importance using a ranger probability forest.
 #
 # For each predictor column the local gradient of the log-probability vector
 # is computed, then contrasted against the first outcome category, and the
@@ -13,22 +13,22 @@
 #   Factor   — max-minus-min sweep across predictor levels
 #
 # Usage via rpy2:
-#   pkg <- rpy2.robjects.packages.STAP( r_code_string, "mald_cat" )
-#   importances <- pkg.stat_forest_mald_categorical( X_all, y, ... )
+#   pkg <- rpy2.robjects.packages.STAP( r_code_string, "prism_cat" )
+#   importances <- pkg.stat_forest_prism_categorical( X_all, y, ... )
 #
 # Note: rpy2 converts Python underscore kwargs to R dot params, so
 #   bandwidth_exponent=0.2  ->  bandwidth.exponent = 0.2  in R.
 
 # -- Private helpers (prefixed to avoid global namespace collisions)
 
-.mald_cat.unzero_normalize <- function( mat ){
+.prism_cat.unzero_normalize <- function( mat ){
     # Replace zero cells with the minimum nonzero value, then row-normalize.
     min_nonzero <- min( mat[ mat > 0 ] )
     mat[ mat == 0 ] <- min_nonzero
     mat / rowSums( mat )
 }
 
-.mald_cat.mahal_norms <- function( contrasts, VI ){
+.prism_cat.mahal_norms <- function( contrasts, VI ){
     # Mahalanobis norm from the origin for each row of `contrasts` (n x d).
     # Computed as sqrt( rowSums( (contrasts %*% VI) * contrasts ) ).
     # More efficient than apply + t(v) %*% VI %*% v for large n.
@@ -38,7 +38,7 @@
 
 # -- Main function
 
-#' Categorical-outcome MALD importance (probability forest)
+#' Categorical-outcome PRISM importance (probability forest)
 #'
 #' @param X_all   n x 2p data.frame: original X and knockoff X_k concatenated column-wise.
 #' @param y       Factor vector of length n giving the outcome category for each observation.
@@ -48,7 +48,7 @@
 #' @param verbose   Print progress every `verbose` columns (0 = silent).
 #' @param ...   Additional arguments forwarded to ranger::ranger.
 #' @return Numeric vector of length 2p: mean absolute local-gradient importances.
-stat.forest.mald_categorical <- function(
+stat.forest.prism_categorical <- function(
     X_all,
     y,
     bandwidth           = 1,
@@ -88,12 +88,12 @@ stat.forest.mald_categorical <- function(
 
     # -- Base log-probability predictions  (n x k_y)
     base.probs <- predict( forest, data = X_all )$predictions
-    base.log   <- log( .mald_cat.unzero_normalize( base.probs ) )
+    base.log   <- log( .prism_cat.unzero_normalize( base.probs ) )
     k_y        <- ncol( base.log )
 
     # Only one class predicted — log-odds contrasts are undefined; return zeros.
     if ( k_y < 2 ){
-        warning( "stat.forest.mald_categorical: only one class predicted; returning zero importances" )
+        warning( "stat.forest.prism_categorical: only one class predicted; returning zero importances" )
         return( rep( 0.0, p_all ) )
     }
 
@@ -117,7 +117,7 @@ stat.forest.mald_categorical <- function(
     for ( j in seq_len( p_all ) ){
         if ( verbose > 0 && j %% verbose == 0 ){
             message( sprintf(
-                "stat.forest.mald_categorical: column %d / %d", j, p_all
+                "stat.forest.prism_categorical: column %d / %d", j, p_all
             ) )
         }
 
@@ -132,7 +132,7 @@ stat.forest.mald_categorical <- function(
                 X.test        <- X_all
                 X.test[[ j ]] <- x.levels[[ ki ]]   # recycled to all n rows
                 preds         <- predict( forest, data = X.test )$predictions
-                log_p         <- log( .mald_cat.unzero_normalize( preds ) )  # n x k_y
+                log_p         <- log( .prism_cat.unzero_normalize( preds ) )  # n x k_y
                 logodds_per_level[ , , ki ] <- log_p[ , 2:k_y, drop = FALSE ] - log_p[ , 1 ]
             }
 
@@ -150,7 +150,7 @@ stat.forest.mald_categorical <- function(
             X.test        <- X_all
             X.test[[ j ]] <- X_all[[ j ]] + bw
 
-            mod.log <- log( .mald_cat.unzero_normalize(
+            mod.log <- log( .prism_cat.unzero_normalize(
                 predict( forest, data = X.test )$predictions
             ) )
 
@@ -163,7 +163,7 @@ stat.forest.mald_categorical <- function(
             )
         }
 
-        importances_pointwise[ , j ] <- .mald_cat.mahal_norms( contrasts, VI )
+        importances_pointwise[ , j ] <- .prism_cat.mahal_norms( contrasts, VI )
     }
 
     # Mean importance with exponent (Mahalanobis norms are already non-negative)

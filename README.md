@@ -172,9 +172,9 @@ imp = rangerGiniImportances(X=X, Xk=Xk, y=y, outcome_type="continuous")
 
 Requires R and `rpy2` with the `ranger` package installed.
 
-### Random Forest MALD — `rangerMaldImportances`
+### Random Forest PRISM — `rangerPrismImportances`
 
-Fits a ranger random forest on `[X, Xk]` and computes Mean Absolute Local Derivative (MALD) importances: for each predictor column, the pointwise sensitivity of the forest's prediction is measured and averaged. This captures how much the output changes when a variable is perturbed, unlike Gini which aggregates split quality.
+Fits a ranger random forest on `[X, Xk]` and computes PRISM importances: for each predictor column, the pointwise sensitivity of the forest's prediction is measured and averaged. This captures how much the output changes when a variable is perturbed, unlike Gini which aggregates split quality.
 
 Predictor handling is native — numeric columns use a bandwidth finite-difference, factor columns sweep over all levels (max-minus-min) — so **no one-hot encoding is applied at any outcome type**.
 
@@ -187,13 +187,13 @@ Predictor handling is native — numeric columns use a bandwidth finite-differen
 Returns a `(2p,)` array of raw importances — first `p` for `X`, last `p` for `Xk`. Pass through `wFromImportances` for knockoff W-statistics.
 
 ```python
-from heteroknockoffpy.importance import rangerMaldImportances, wFromImportances
+from heteroknockoffpy.importance import rangerPrismImportances, wFromImportances
 
-imp = rangerMaldImportances(X=X, Xk=Xk, y=y, outcome_type="continuous")
+imp = rangerPrismImportances(X=X, Xk=Xk, y=y, outcome_type="continuous")
 W   = wFromImportances(imp)
 ```
 
-Accepts any extra keyword arguments (e.g. `bandwidth`, `exponent`, `num_trees`) which are forwarded to `ranger::ranger` or the MALD script. Requires R and `rpy2` with the `ranger` package installed.
+Accepts any extra keyword arguments (e.g. `bandwidth`, `exponent`, `num_trees`) which are forwarded to `ranger::ranger` or the PRISM script. Requires R and `rpy2` with the `ranger` package installed.
 
 ### `model_type` (PRISM only)
 
