@@ -116,6 +116,26 @@ imp = prismGImportances(
 
 The regularization path defaults to `logspace(1, -2, 50)`; pass `lambda_path` and/or `a_path` to override. `epochs` is distributed evenly across stages.
 
+### PRISM-GW — `prismGWImportances`
+
+Trains the same model as PRISM-G and PRISM-W but in a single pass, producing both sets of importances simultaneously. At each lambda stage the snapshot closure captures PRISM-W group norms as a side effect while returning PRISM-G local-gradient importances as the primary snapshot. Roughly halves the compute cost of running both methods separately.
+
+Returns a 2-tuple `(g_importances, w_importances)`, each of shape `(2p,)`.
+
+```python
+from heteroknockoffpy.importance import prismGWImportances
+
+g_imp, w_imp = prismGWImportances(
+    X=X, Xk=Xk, y=y,
+    layers=[64, 32],
+    outcome_type="continuous",
+    local_grad_method="bandwidth",  # "auto_diff" | "bandwidth"
+    epochs=500,
+)
+```
+
+All parameters are identical to `prismGImportances`. `local_grad_method` is required (it governs the G snapshot; the W snapshot uses group norms and needs no gradient method).
+
 ### Lasso — `lassoImportances`
 
 Fits a penalized linear model on `[X, Xk]` and uses absolute coefficient values as importances. Cross-validates the regularization strength automatically. Fast and interpretable; best when the outcome-feature relationship is approximately linear.

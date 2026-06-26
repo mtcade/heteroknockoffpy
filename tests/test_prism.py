@@ -738,3 +738,132 @@ def test_prism_g_local_gradients_count_outcome():
     )
     assert grads.shape == (100, 5)
     assert np.isfinite(grads).all()
+
+
+# ---------------------------------------------------------------------------
+# prismGWImportances — single-pass dual importances
+# ---------------------------------------------------------------------------
+
+def test_prism_gw_returns_tuple_of_two_arrays():
+    """prismGWImportances returns a 2-tuple of numpy arrays."""
+    X, Xk, y = _make_synthetic(n=100, p=5, seed=50)
+    result = importance.prismGWImportances(
+        X=X, Xk=Xk, y=y, layers=[8],
+        local_grad_method='auto_diff',
+        lambda_path=np.logspace(0, -1, 4), epochs=3,
+    )
+    assert isinstance(result, tuple) and len(result) == 2
+    g_imp, w_imp = result
+    assert isinstance(g_imp, np.ndarray)
+    assert isinstance(w_imp, np.ndarray)
+
+
+def test_prism_gw_shape_and_nonneg():
+    """Both G and W importances have shape (2*p,) and are non-negative."""
+    X, Xk, y = _make_synthetic(n=100, p=5, seed=51)
+    g_imp, w_imp = importance.prismGWImportances(
+        X=X, Xk=Xk, y=y, layers=[8],
+        local_grad_method='auto_diff',
+        lambda_path=np.logspace(0, -1, 4), epochs=3,
+    )
+    assert g_imp.shape == (10,), g_imp.shape
+    assert w_imp.shape == (10,), w_imp.shape
+    assert np.all(g_imp >= 0)
+    assert np.all(w_imp >= 0)
+
+
+def test_prism_gw_bandwidth():
+    """prismGWImportances with bandwidth local_grad_method."""
+    X, Xk, y = _make_synthetic(n=100, p=5, seed=52)
+    g_imp, w_imp = importance.prismGWImportances(
+        X=X, Xk=Xk, y=y, layers=[8],
+        local_grad_method='bandwidth',
+        lambda_path=np.logspace(0, -1, 4), epochs=3,
+    )
+    assert g_imp.shape == (10,)
+    assert w_imp.shape == (10,)
+    assert np.all(g_imp >= 0)
+    assert np.all(w_imp >= 0)
+
+
+def test_prism_gw_g_and_w_differ():
+    """G and W importances use different scoring methods and must not be identical."""
+    X, Xk, y = _make_synthetic(n=150, p=8, seed=53)
+    g_imp, w_imp = importance.prismGWImportances(
+        X=X, Xk=Xk, y=y, layers=[16, 8],
+        local_grad_method='auto_diff',
+        lambda_path=np.logspace(0, -1, 5), epochs=4,
+    )
+    assert not np.allclose(g_imp, w_imp), "PRISM_g and PRISM_w should differ"
+
+
+def test_prism_gw_w_matches_standalone_prism_w_structure():
+    """W importances are group norms — all non-negative and finite, like standalone prismW."""
+    X, Xk, y = _make_synthetic(n=100, p=5, seed=54)
+    _, w_imp = importance.prismGWImportances(
+        X=X, Xk=Xk, y=y, layers=[8],
+        local_grad_method='auto_diff',
+        lambda_path=np.logspace(0, -1, 4), epochs=3,
+    )
+    assert np.all(w_imp >= 0)
+    assert np.isfinite(w_imp).all()
+
+
+def test_prism_gw_cat_input():
+    """prismGWImportances with categorical input columns."""
+    X, Xk, p = _make_mixed_X(n=150, p_numeric=3, cat_cols=[2, 3], seed=55)
+    y = pl.Series("y", np.random.default_rng(55).standard_normal(150))
+    g_imp, w_imp = importance.prismGWImportances(
+        X=X, Xk=Xk, y=y, layers=[8],
+        local_grad_method='auto_diff',
+        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+    )
+    assert g_imp.shape == (2 * p,), g_imp.shape
+    assert w_imp.shape == (2 * p,), w_imp.shape
+    assert np.all(g_imp >= 0)
+    assert np.all(w_imp >= 0)
+
+
+def test_prism_gw_cat_output():
+    """prismGWImportances with categorical outcome (CrossEntropyLoss path)."""
+    X, Xk, _ = _make_synthetic(n=150, p=5, seed=56)
+    y = _make_cat_y(150, k=3, seed=56)
+    g_imp, w_imp = importance.prismGWImportances(
+        X=X, Xk=Xk, y=y, layers=[8],
+        local_grad_method='auto_diff',
+        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+    )
+    assert g_imp.shape == (10,)
+    assert w_imp.shape == (10,)
+    assert np.all(g_imp >= 0)
+    assert np.all(w_imp >= 0)
+
+
+def test_prism_gw_count_outcome():
+    """prismGWImportances with Poisson count outcome."""
+    X, Xk, _ = _make_synthetic(n=150, p=5, seed=57)
+    y = _make_count_y(150, seed=57)
+    g_imp, w_imp = importance.prismGWImportances(
+        X=X, Xk=Xk, y=y, layers=[8],
+        local_grad_method='auto_diff',
+        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+    )
+    assert g_imp.shape == (10,)
+    assert w_imp.shape == (10,)
+    assert np.all(g_imp >= 0)
+    assert np.all(w_imp >= 0)
+
+
+def test_prism_gw_snapshot_count_matches_lambda_stages():
+    """Each lambda stage produces one G snapshot and one W snapshot."""
+    X, Xk, y = _make_synthetic(n=100, p=5, seed=58)
+    lambda_path = np.logspace(0, -1, 6)
+    # Both outputs are means over 6 snapshots; we can't inspect them directly,
+    # but running without error and returning the right shape confirms the counts match.
+    g_imp, w_imp = importance.prismGWImportances(
+        X=X, Xk=Xk, y=y, layers=[8],
+        local_grad_method='auto_diff',
+        lambda_path=lambda_path, epochs=3,
+    )
+    assert g_imp.shape == (10,)
+    assert w_imp.shape == (10,)

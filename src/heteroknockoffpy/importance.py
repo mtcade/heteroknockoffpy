@@ -493,6 +493,141 @@ def prismGImportances(
 #/def prismGImportances
 
 
+def prismGWImportances(
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
+    layers: Sequence[ int ],
+    outcome_type: Literal['continuous','count','categorical',] | None = None,
+    local_grad_method: Literal['auto_diff','bandwidth'] = 'auto_diff',
+    lambda_path: Sequence[ float ] | None = None,
+    a_path: Iterable[ float ] | None = None,
+    batch_size: int | None = None,
+    epochs: int = 500,
+    bandwidth: float | None = None,
+    exponent: float = 1.0,
+    model_type: str = 'mlp',
+    learning_rate: float = 0.01,
+    drop_first: bool = True,
+    dense_activation: str = 'relu',
+    verbose: int = 0,
+    ) -> tuple[ np.ndarray, np.ndarray ]:
+    """
+    PRISM-G and PRISM-W importances from a single training pass.
+
+    Identical hyperparameters and model to prismGImportances / prismWImportances.
+    At each lambda stage the snapshot_fn records PRISM-W group norms as a side
+    effect while returning PRISM-G local-gradient importances as the primary snapshot.
+
+    :returns: (g_importances, w_importances) both of shape (2*p,).
+    """
+    from . import torchImportances
+
+    if lambda_path is None:
+        lambda_path = _DEFAULT_LAMBDA_PATH
+    #
+
+    X_all_np, y_np, groups, oheDict, loss_func, output_dimension, outcomeDescriptor = _prism_setup(
+        X = X, Xk = Xk, y = y,
+        layers = layers,
+        outcome_type = outcome_type,
+        drop_first = drop_first,
+    )
+
+    _mu = X_all_np.mean( axis=0 )
+    _sd = np.maximum( X_all_np.std( axis=0 ), 1e-8 )
+    X_all_np = ( X_all_np - _mu ) / _sd
+
+    cat_ohe_vals: dict[ int, tuple[ float, float ] ] = {}
+    for _col_idx in oheDict.values():
+        if not isinstance( _col_idx, int ):
+            for k in _col_idx:
+                cat_ohe_vals[ k ] = (
+                    float( ( 0.0 - _mu[ k ] ) / _sd[ k ] ),
+                    float( ( 1.0 - _mu[ k ] ) / _sd[ k ] ),
+                )
+    #
+
+    predictionModel: torchImportances.PRISMPredictionModel = torchImportances.PRISMPredictionModel(
+        input_size = X_all_np.shape[1],
+        layers = list( layers ),
+        dense_activation = dense_activation,
+        loss_func = loss_func,
+        output_dimension = output_dimension,
+        learning_rate = learning_rate,
+        epochs = epochs,
+        model_type = model_type,
+        verbose = verbose,
+    )
+
+    w_snapshots: list[ np.ndarray ] = []
+
+    if outcomeDescriptor.outcome_type == 'categorical':
+        def snapshot_fn( model: torchImportances.PRISMPredictionModel, X_t: torch.Tensor ) -> np.ndarray:
+            w_snapshots.append( model.get_group_importances( groups ) )
+            with torch.no_grad():
+                _logits = model.predict_t( X_t )
+            logit_contrasts = _logits[:, 1:] - _logits[:, 0:1]
+            _cov = torch.cov( logit_contrasts.T )
+            if _cov.ndim == 0:
+                inv_cov_t = torch.tensor( [[ 1.0 / _cov.item() ]], device=X_t.device, dtype=torch.float32 )
+            else:
+                inv_cov_t = torch.linalg.inv( _cov )
+            #
+            if local_grad_method == 'auto_diff':
+                return _prismImportances_categorical_t(
+                    model = model,
+                    X_all_t = X_t,
+                    oheDict = oheDict,
+                    inv_cov_t = inv_cov_t,
+                    exponent = exponent,
+                    drop_first = drop_first,
+                    cat_ohe_vals = cat_ohe_vals,
+                ).cpu().numpy()
+            else:
+                return _prismImportances_t(
+                    model = model,
+                    X_all_t = X_t,
+                    oheDict = oheDict,
+                    local_grad_method = 'bandwidth',
+                    bandwidth = bandwidth,
+                    exponent = exponent,
+                    drop_first = drop_first,
+                    inv_cov_t = inv_cov_t,
+                    cat_ohe_vals = cat_ohe_vals,
+                ).cpu().numpy()
+            #
+        #/def snapshot_fn
+    else:
+        def snapshot_fn( model: torchImportances.PRISMPredictionModel, X_t: torch.Tensor ) -> np.ndarray:
+            w_snapshots.append( model.get_group_importances( groups ) )
+            return _prismImportances_t(
+                model = model,
+                X_all_t = X_t,
+                oheDict = oheDict,
+                local_grad_method = local_grad_method,
+                bandwidth = bandwidth,
+                exponent = exponent,
+                drop_first = drop_first,
+                cat_ohe_vals = cat_ohe_vals,
+            ).cpu().numpy()
+        #/def snapshot_fn
+    #
+
+    g_snapshots: list[ np.ndarray ] = predictionModel.fit(
+        X = X_all_np,
+        y = y_np,
+        groups = groups,
+        lambda_path = lambda_path,
+        a_path = a_path,
+        batch_size = batch_size,
+        snapshot_fn = snapshot_fn,
+    )
+
+    return np.mean( g_snapshots, axis=0 ), np.mean( w_snapshots, axis=0 )
+#/def prismGWImportances
+
+
 def _get_localGrad_ohe_matrix_t(
     model:             'object',
     X_all_t:           torch.Tensor,
