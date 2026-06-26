@@ -9,6 +9,7 @@
 """
 
 from . import utilities
+from .utilities import DataFrameLike, _resolve_df
 
 import polars as pl
 import numpy as np
@@ -16,7 +17,7 @@ import numpy as np
 from typing import Callable, Literal
 
 def get_withCallable(
-    X: pl.DataFrame,
+    X: DataFrameLike,
     rng: np.random.Generator,
     categorical_method: Literal['forest','linear','ohe','scip'],
     knockoffCallable: Callable[ [ np.ndarray ], np.ndarray ],
@@ -34,6 +35,7 @@ def get_withCallable(
         :param knockoffCallable: Closure to convert either conditional residuals or one-hot-encoded data to knockoffs of the same format. Make sure it has the desired parameters based on whether you are using scip, or another method
         :param conditional_expectations: Numeric conditional expectations. If not provided, uses `rbridge.get_forest_conditional_expectations` to calculate, if `categorical_method='scip'`
     """
+    X = _resolve_df(X)
     if categorical_method == 'scip':
         from . import rbridge
         
@@ -129,7 +131,7 @@ def get_withCallable(
 #/def get_withCallable
 
 def get_second_order(
-    X: pl.DataFrame,
+    X: DataFrameLike,
     rng: np.random.Generator,
     categorical_method: Literal['forest','linear','ohe','scip',],
     conditional_expectations: pl.DataFrame | None = None,
@@ -167,7 +169,7 @@ def get_second_order(
 #/def get_second_order
 
 def get_torchGAN(
-    X: pl.DataFrame,
+    X: DataFrameLike,
     rng: np.random.Generator,
     categorical_method: Literal['forest','linear','ohe','scip',],
     conditional_expectations: pl.DataFrame | None = None,
@@ -206,7 +208,7 @@ def get_torchGAN(
 #/def get_torchGAN
 
 def get_SCIP(
-    X: pl.DataFrame,
+    X: DataFrameLike,
     rng: np.random.Generator,
     residuals_method: Literal['normal','permute',] = 'normal',
     verbose: int = 0,
@@ -232,7 +234,7 @@ def get_SCIP(
 #/def get_SCIP
 
 def get_knockoffs(
-    X: pl.DataFrame,
+    X: DataFrameLike,
     method: Literal[
         "second_order",
         "GAN_torch",

@@ -18,6 +18,7 @@
 #' @return Named list mapping each non-factor column name to its n-vector of
 #'         in-sample conditional expectation predictions.
 forest.conditional_expectations <- function( X, ... ){
+    if ( is.character( X ) ) X <- as.data.frame( arrow::open_dataset( X ) )
     vargs <- list( ... )
     if ( !( "respect.unordered.factors" %in% names( vargs ) ) ){
         vargs[[ "respect.unordered.factors" ]] <- "partition"

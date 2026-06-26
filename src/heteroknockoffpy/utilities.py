@@ -5,11 +5,26 @@
 #//  Created by Evan Mason on 2/10/26.
 #//
 
+import os
+
 import polars as pl
 import numpy as np
 
 from typing import Literal, Self
 from dataclasses import dataclass
+
+DataFrameLike = pl.DataFrame | str | os.PathLike
+SeriesOrDataFrameLike = pl.Series | pl.DataFrame | str | os.PathLike
+
+def _resolve_df(x: DataFrameLike) -> pl.DataFrame:
+    if isinstance(x, pl.DataFrame):
+        return x
+    return pl.read_parquet(x)
+
+def _resolve_y(y: SeriesOrDataFrameLike) -> pl.Series | pl.DataFrame:
+    if isinstance(y, (str, os.PathLike)):
+        return pl.read_parquet(y)
+    return y
 
 @dataclass
 class OutcomeDescriptor:

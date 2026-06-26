@@ -21,6 +21,7 @@
 #'         matrix, where k is the number of levels in that column and columns
 #'         are in sorted level order.
 forest.ohe_probabilities <- function( X, ... ){
+    if ( is.character( X ) ) X <- as.data.frame( arrow::open_dataset( X ) )
     vargs <- list( ... )
     if ( !( "respect.unordered.factors" %in% names( vargs ) ) ){
         vargs[[ "respect.unordered.factors" ]] <- "partition"

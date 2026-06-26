@@ -109,6 +109,7 @@ scip.knockoffs <- function(
     seed             = NULL,
     ...
 ){
+    if ( is.character( X ) ) X <- as.data.frame( arrow::open_dataset( X ) )
     if ( !is.null( seed ) ) set.seed( as.integer( seed ) )
 
     vargs <- list( ... )
@@ -173,6 +174,7 @@ scip.knockoffs_with_numeric <- function(
     seed = NULL,
     ...
 ){
+    if ( is.character( X ) ) X <- as.data.frame( arrow::open_dataset( X ) )
     if ( !is.null( seed ) ) set.seed( as.integer( seed ) )
 
     vargs <- list( ... )
