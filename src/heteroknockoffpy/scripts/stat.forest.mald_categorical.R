@@ -126,22 +126,20 @@ stat.forest.mald_categorical <- function(
             x.levels <- levels( X_all[[ j ]] )
             k_x      <- length( x.levels )
 
-            # Collect log-prob matrices for each level: n x k_y x k_x
-            log_preds <- array( 0, dim = c( n, k_y, k_x ) )
+            # Collect per-level log-odds contrasts (vs first outcome class): n x (k_y-1) x k_x
+            logodds_per_level <- array( 0.0, dim = c( n, k_y - 1, k_x ) )
             for ( ki in seq_len( k_x ) ){
                 X.test        <- X_all
                 X.test[[ j ]] <- x.levels[[ ki ]]   # recycled to all n rows
                 preds         <- predict( forest, data = X.test )$predictions
-                log_preds[ , , ki ] <- log( .mald_cat.unzero_normalize( preds ) )
+                log_p         <- log( .mald_cat.unzero_normalize( preds ) )  # n x k_y
+                logodds_per_level[ , , ki ] <- log_p[ , 2:k_y, drop = FALSE ] - log_p[ , 1 ]
             }
 
-            # Max-minus-min across predictor levels  ->  n x k_y
-            range_mat <- apply( log_preds, c( 1, 2 ), max ) -
-                         apply( log_preds, c( 1, 2 ), min )
-
-            # Log-odds contrast  ->  n x (k_y-1)
+            # Range of log-odds contrasts across predictor levels  ->  n x (k_y-1)
             contrasts <- as.matrix(
-                range_mat[ , 2:k_y, drop = FALSE ] - range_mat[ , 1 ]
+                apply( logodds_per_level, c( 1, 2 ), max ) -
+                apply( logodds_per_level, c( 1, 2 ), min )
             )
 
         } else {

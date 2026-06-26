@@ -6,7 +6,7 @@
 #//
 
 from . import utilities
-from .utilities import OutcomeDescriptor
+from .utilities import OutcomeDescriptor, DataFrameLike, SeriesOrDataFrameLike, _resolve_df, _resolve_y
 
 import os
 os.environ["RPY2_CFFI_MODE"] = "ABI"
@@ -76,15 +76,24 @@ if not rpackages.isinstalled('ranger'):
     )
 #
 
+if not rpackages.isinstalled('arrow'):
+    rutils = rpackages.importr('utils')
+    rutils.chooseCRANmirror(ind=1)
+    rutils.install_packages(
+        'arrow',
+    )
+#
+
 
 rKnockoff = rpackages.importr('knockoff')
 
-rRanger = rpackages.importr('ranger')
-
-rStats = rpackages.importr('stats')
+def _schema_of(x: DataFrameLike) -> pl.Schema:
+    if isinstance(x, pl.DataFrame):
+        return x.schema
+    return pl.scan_parquet(os.fspath(x)).schema
 
 def get_ohe_forest_probabilities_np(
-    X: pl.DataFrame,
+    X: DataFrameLike,
     logit: bool = True,
     drop_first: bool = True,
     verbose: int = 0,
@@ -97,6 +106,8 @@ def get_ohe_forest_probabilities_np(
         The column loop runs entirely in R (forest.ohe_probabilities), loaded once
         per call via rpy2.robjects.packages.STAP.
     """
+    if not isinstance(X, pl.DataFrame):
+        raise NotImplementedError("Path input not supported for get_ohe_forest_probabilities_np; X must be a pl.DataFrame")
     # -- Load R script via STAP
     _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("forest.ohe_probabilities.R").read_text()
 
@@ -173,7 +184,7 @@ def get_ohe_forest_probabilities_np(
 #/def get_ohe_forest_probabilities_np
 
 def get_forest_conditional_expectations(
-    X: pl.DataFrame,
+    X: DataFrameLike,
     verbose: int = 0,
     verbose_prefix: str = '',
     **kwargs
@@ -193,11 +204,14 @@ def get_forest_conditional_expectations(
     with ro.default_converter.context():
         _cond_exp = rpackages.STAP( _r_code, "cond_exp" )
 
-        # -- Convert X to R data.frame
-        with (
-            ro.default_converter + pandas2ri.converter
-        ).context():
-            X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+        # -- Convert X to R data.frame or pass path string; R loads via arrow if string
+        if isinstance( X, pl.DataFrame ):
+            with (
+                ro.default_converter + pandas2ri.converter
+            ).context():
+                X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+        else:
+            X_r = StrVector( [ os.fspath( X ) ] )
 
         # -- Single R call: returns named list of per-column expectation vectors
         with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
@@ -218,7 +232,7 @@ def get_forest_conditional_expectations(
     return pl.DataFrame(
         conditional_expectations_dict,
         schema = {
-            col: val for col, val in X.schema.items()\
+            col: val for col, val in _schema_of( X ).items()\
                 if val != pl.Categorical
             #/
         }
@@ -228,7 +242,7 @@ def get_forest_conditional_expectations(
 # -- Categorical SCIP with numeric knockoffs
 
 def get_knockoffs_with_Xk_numeric(
-    X: pl.DataFrame,
+    X: DataFrameLike,
     Xk_numeric: np.ndarray,
     rng: np.random.Generator,
     verbose: int = 0,
@@ -245,7 +259,7 @@ def get_knockoffs_with_Xk_numeric(
         :param kwargs: Passed to r ranger::ranger
     """
     numeric_columns: tuple[ str,... ] = tuple(
-        col for col, dtype in X.schema.items() if dtype != pl.Categorical
+        col for col, dtype in _schema_of( X ).items() if dtype != pl.Categorical
     )
     assert len( numeric_columns ) == Xk_numeric.shape[1]
 
@@ -258,11 +272,14 @@ def get_knockoffs_with_Xk_numeric(
     with ro.default_converter.context():
         _scip = rpackages.STAP( _r_code, "scip" )
 
-        # -- Convert X to R data.frame (pandas2ri handles pl.Categorical -> R factor)
-        with (
-            ro.default_converter + pandas2ri.converter
-        ).context():
-            X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+        # -- Convert X to R data.frame or pass path string; R loads via arrow if string
+        if isinstance( X, pl.DataFrame ):
+            with (
+                ro.default_converter + pandas2ri.converter
+            ).context():
+                X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+        else:
+            X_r = StrVector( [ os.fspath( X ) ] )
 
         # -- Convert Xk_numeric to R matrix (positional, no column names needed)
         with (
@@ -288,7 +305,7 @@ def get_knockoffs_with_Xk_numeric(
             Xk_pd: pd.DataFrame = ro.conversion.get_conversion().rpy2py( Xk_r )
 
     return pl.from_pandas( Xk_pd ).cast(
-        { col: dtype for col, dtype in X.schema.items() }
+        { col: dtype for col, dtype in _schema_of( X ).items() }
     )
 #/def get_knockoffs_with_Xk_numeric
 
@@ -321,7 +338,7 @@ def get_knockoffs_second_order_np(
 #/def get_knockoffs_second_order_np
 
 def get_knockoffs_SCIP(
-    X: pl.DataFrame,
+    X: DataFrameLike,
     rng: np.random.Generator,
     residuals_method: Literal['normal','permute',] = 'normal',
     verbose: int = 0,
@@ -347,11 +364,14 @@ def get_knockoffs_SCIP(
     with ro.default_converter.context():
         _scip = rpackages.STAP( _r_code, "scip" )
 
-        # -- Convert X to R data.frame (pandas2ri handles pl.Categorical -> R factor)
-        with (
-            ro.default_converter + pandas2ri.converter
-        ).context():
-            X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+        # -- Convert X to R data.frame or pass path string; R loads via arrow if string
+        if isinstance( X, pl.DataFrame ):
+            with (
+                ro.default_converter + pandas2ri.converter
+            ).context():
+                X_r = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+        else:
+            X_r = StrVector( [ os.fspath( X ) ] )
 
         # -- Single R call: returns n x p data.frame of knockoffs
         with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
@@ -369,113 +389,167 @@ def get_knockoffs_SCIP(
             Xk_pd: pd.DataFrame = ro.conversion.get_conversion().rpy2py( Xk_r )
 
     return pl.from_pandas( Xk_pd ).cast(
-        { col: dtype for col, dtype in X.schema.items() }
+        { col: dtype for col, dtype in _schema_of( X ).items() }
     )
 #/def get_knockoffs_SCIP
 
 
 def rangerGiniImportances(
-    X: pl.DataFrame,
-    Xk: pl.DataFrame,
-    y: pl.Series | pl.DataFrame,
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
     verbose_prefix: str = '',
     **kwargs,
     ) -> np.ndarray:
     """
-        :param kwargs: Passed to r knockoff::stat.random_forest
+        :param kwargs: Passed to ranger::ranger via stat_forest_hetero_gini
     """
+    if not isinstance(X, pl.DataFrame):
+        raise NotImplementedError("Path input not supported for rangerGiniImportances; X must be a pl.DataFrame")
+    if not isinstance(Xk, pl.DataFrame):
+        raise NotImplementedError("Path input not supported for rangerGiniImportances; Xk must be a pl.DataFrame")
+    y = _resolve_y(y)
     outcomeDescriptor: OutcomeDescriptor = OutcomeDescriptor.infer(
         y = y,
         outcome_type = outcome_type,
     )
-    
+
     if outcomeDescriptor.outcome_dimension != 'single':
         raise TypeError("Joint outcomes unavailable")
     #
-    
-    # stat_forest_hetero_gini gives only W stats, not importances
-    # As a result, concatenate with zeros. This gives the same result.
-    
-    _categories_override: dict[ str, list[ str ] ] = {
-        col: sorted( X[ col ].cast( pl.Utf8 ).unique().drop_nulls().to_list() )
-        for col in X.columns
-        if X.schema[ col ] == pl.Categorical
-    }
 
-    X_ohe: np.ndarray = utilities.get_ohe_np(
-        X = X,
-        drop_first = True,
-    )
+    _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("stat.forest.hetero_gini.R").read_text()
 
-    Xk_ohe: np.ndarray = utilities.get_ohe_np(
-        X = Xk,
-        drop_first = True,
-        categories_override = _categories_override,
-    )
-    
-    oheDict: dict[ str, int | tuple[ int,...] ] = utilities.get_oheDict(
-        X = X,
-        drop_first = True,
-    )
-    
-    w_stats_raw: np.ndarray
+    w_stats: np.ndarray
     with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
         with ro.default_converter.context():
+            _hetero_gini = rpackages.STAP( _r_code, "hetero_gini" )
+
+            with (
+                ro.default_converter + pandas2ri.converter
+            ).context():
+                X_r  = ro.conversion.get_conversion().py2rpy( X.to_pandas() )
+                Xk_r = ro.conversion.get_conversion().py2rpy( Xk.to_pandas() )
+
             if outcomeDescriptor.outcome_type == 'categorical':
-                _y_series: pl.Series = y.to_series() if isinstance(y, pl.DataFrame) else y
-                y_r = ro.FactorVector(_y_series.cast(pl.Utf8).to_list())
-                with (
-                    ro.default_converter + numpy2ri.converter
-                ).context():
-                    w_stats_raw = rKnockoff.stat_random_forest(
-                        X = X_ohe,
-                        X_k = Xk_ohe,
-                        y = y_r,
-                        **kwargs,
-                    )
+                _y_series: pl.Series = y.to_series() if isinstance( y, pl.DataFrame ) else y
+                y_r = ro.FactorVector( _y_series.cast( pl.Utf8 ).to_list() )
             else:
-                _y_np: np.ndarray = (
-                    y.to_numpy() if isinstance(y, np.ndarray)
-                    else y.to_numpy() if isinstance(y, pl.Series)
-                    else y.to_numpy().squeeze()
+                _y_series_or_df = y
+                _y_arr: np.ndarray = (
+                    _y_series_or_df.to_numpy() if isinstance( _y_series_or_df, pl.Series )
+                    else _y_series_or_df.to_numpy().squeeze()
                 )
-                # rpy2 cannot convert unsigned integer dtypes
-                if np.issubdtype(_y_np.dtype, np.unsignedinteger):
-                    _y_np = _y_np.astype(np.int64)
-                with (
-                    ro.default_converter + numpy2ri.converter
-                ).context():
-                    w_stats_raw = rKnockoff.stat_random_forest(
-                        X = X_ohe,
-                        X_k = Xk_ohe,
-                        y = _y_np,
-                        **kwargs,
-                    )
+                y_r = ro.FloatVector( _y_arr.astype( np.float64 ).tolist() )
             #/if categorical/else
+
+            w_stats_r = _hetero_gini.stat_forest_hetero_gini(
+                X_r, Xk_r, y_r,
+                outcome_type = outcomeDescriptor.outcome_type,
+                **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+            )
+
+            with (
+                ro.default_converter + numpy2ri.converter
+            ).context():
+                w_stats = np.asarray( w_stats_r )
         #/with ro.default_converter
     #/with _r_warnings_to_stdout
 
-    # Take max from categorical OHE columns, others literally
-    w_stats: np.ndarray = np.fromiter(
-        (
-            w_stats_raw[ val ]\
-                if isinstance( val, int )\
-                else np.max( w_stats_raw[ list(val) ] )\
-                for val in oheDict.values()
-            #/
-        ),
-        dtype = float,
+    return w_stats
+#/def rangerGiniImportances
+
+
+_MALD_SCRIPTS: dict[ str, tuple[ str, str ] ] = {
+    'continuous': ( 'stat.forest.mald_continuous.R',  'stat_forest_mald_continuous'  ),
+    'count':      ( 'stat.forest.mald_count.R',       'stat_forest_mald_count'       ),
+    'categorical':( 'stat.forest.mald_categorical.R', 'stat_forest_mald_categorical' ),
+}
+
+
+def rangerMaldImportances(
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
+    outcome_type: Literal['continuous','count','categorical',] | None = None,
+    verbose: int = 0,
+    verbose_prefix: str = '',
+    **kwargs,
+    ) -> np.ndarray:
+    """
+        MALD (Mean Absolute Local Derivative) importances via a ranger forest.
+
+        Fits a single ranger forest on [X, Xk] → y using the appropriate
+        script for the outcome type, then returns a (2p,) array of mean
+        absolute local-gradient importances — first p for X, last p for Xk.
+
+        Numeric predictors: bandwidth finite-difference of forest predictions.
+        Factor predictors:  max-minus-min sweep across predictor levels.
+        Categorical outcome: Mahalanobis norm of log-probability contrasts.
+
+        :param kwargs: Passed to ranger::ranger via stat_forest_mald_*
+    """
+    if not isinstance( X, pl.DataFrame ):
+        raise NotImplementedError( "Path input not supported for rangerMaldImportances; X must be a pl.DataFrame" )
+    if not isinstance( Xk, pl.DataFrame ):
+        raise NotImplementedError( "Path input not supported for rangerMaldImportances; Xk must be a pl.DataFrame" )
+    y = _resolve_y( y )
+    outcomeDescriptor: OutcomeDescriptor = OutcomeDescriptor.infer(
+        y = y,
+        outcome_type = outcome_type,
     )
 
-    importances = np.concatenate(
+    if outcomeDescriptor.outcome_dimension != 'single':
+        raise TypeError( "Joint outcomes unavailable" )
+
+    ot = outcomeDescriptor.outcome_type
+    if ot not in _MALD_SCRIPTS:
+        raise ValueError(
+            "Unrecognized outcomeDescriptor.outcome_type='{}'".format( ot )
+        )
+    _script, _fn = _MALD_SCRIPTS[ ot ]
+
+    X_all: pl.DataFrame = pl.concat(
         (
-            w_stats,
-            np.zeros_like( w_stats )
-         ),
-         axis = 0,
+            X,
+            Xk.rename( { col: col + '~' for col in Xk.columns } ),
+        ),
+        how = 'horizontal',
     )
-    
+
+    _r_code: str = _pkg_files( "heteroknockoffpy.scripts" ).joinpath( _script ).read_text()
+
+    importances: np.ndarray
+    with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
+        with ro.default_converter.context():
+            _mald = rpackages.STAP( _r_code, _script )
+
+            with (
+                ro.default_converter + pandas2ri.converter
+            ).context():
+                X_all_r = ro.conversion.get_conversion().py2rpy( X_all.to_pandas() )
+
+            if ot == 'categorical':
+                _y_series: pl.Series = y.to_series() if isinstance( y, pl.DataFrame ) else y
+                y_r = ro.FactorVector( _y_series.cast( pl.Utf8 ).to_list() )
+            else:
+                _y_arr: np.ndarray = (
+                    y.to_numpy() if isinstance( y, pl.Series )
+                    else y.to_numpy().squeeze()
+                )
+                y_r = ro.FloatVector( _y_arr.astype( np.float64 ).tolist() )
+
+            result_r = getattr( _mald, _fn )(
+                X_all_r, y_r,
+                **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
+            )
+
+            with (
+                ro.default_converter + numpy2ri.converter
+            ).context():
+                importances = np.asarray( result_r )
+
     return importances
-#/def rangerGiniImportances
+#/def rangerMaldImportances

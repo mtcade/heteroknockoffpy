@@ -1,5 +1,5 @@
 from . import utilities
-from .utilities import OutcomeDescriptor
+from .utilities import OutcomeDescriptor, DataFrameLike, SeriesOrDataFrameLike, _resolve_df, _resolve_y
 
 import numpy as np
 import polars as pl
@@ -205,9 +205,9 @@ def _maldImportances_categorical_t(
 
 
 def _prism_setup(
-    X: pl.DataFrame,
-    Xk: pl.DataFrame,
-    y: pl.Series | pl.DataFrame,
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
     layers: Sequence[int],
     outcome_type: Literal['continuous','count','categorical'] | None,
     drop_first: bool,
@@ -218,6 +218,10 @@ def _prism_setup(
     Returns (X_all_np, y_np, groups, oheDict, loss_func, output_dimension, outcomeDescriptor).
     """
     import torch.nn as nn
+
+    X = _resolve_df(X)
+    Xk = _resolve_df(Xk)
+    y = _resolve_y(y)
 
     outcomeDescriptor: OutcomeDescriptor = OutcomeDescriptor.infer(
         y = y,
@@ -287,9 +291,9 @@ _DEFAULT_LAMBDA_PATH: np.ndarray = np.logspace( 1, -2, 50 )
 
 
 def prismWImportances(
-    X: pl.DataFrame,
-    Xk: pl.DataFrame,
-    y: pl.Series | pl.DataFrame,
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
     layers: Sequence[ int ],
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     lambda_path: Sequence[ float ] | None = None,
@@ -357,9 +361,9 @@ def prismWImportances(
 
 
 def prismGImportances(
-    X: pl.DataFrame,
-    Xk: pl.DataFrame,
-    y: pl.Series | pl.DataFrame,
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
     layers: Sequence[ int ],
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     local_grad_method: Literal['auto_diff','bandwidth'] = 'auto_diff',
@@ -554,9 +558,9 @@ def _get_localGrad_ohe_matrix_t(
 
 
 def prismGLocalGradients(
-    X:                 pl.DataFrame,
-    Xk:                pl.DataFrame,
-    y:                 'pl.Series | pl.DataFrame',
+    X:                 DataFrameLike,
+    Xk:                DataFrameLike,
+    y:                 SeriesOrDataFrameLike,
     layers:            'Sequence[int]',
     outcome_type:      'Literal["continuous","count","categorical"] | None' = None,
     local_grad_method: 'Literal["auto_diff","bandwidth"]' = 'bandwidth',
@@ -631,16 +635,14 @@ def prismGLocalGradients(
 
 
 def rangerGiniImportances(
-    X: pl.DataFrame,
-    Xk: pl.DataFrame,
-    y: pl.Series | pl.DataFrame,
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
     **kwargs,
     ) -> np.ndarray:
     from . import rbridge
-    
-    # TODO: update
     return rbridge.rangerGiniImportances(
         X = X,
         Xk = Xk,
@@ -650,6 +652,26 @@ def rangerGiniImportances(
         **kwargs,
     )
 #/def rangerGiniImportances
+
+
+def rangerMaldImportances(
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
+    outcome_type: Literal['continuous','count','categorical',] | None = None,
+    verbose: int = 0,
+    **kwargs,
+    ) -> np.ndarray:
+    from . import rbridge
+    return rbridge.rangerMaldImportances(
+        X = X,
+        Xk = Xk,
+        y = y,
+        outcome_type = outcome_type,
+        verbose = verbose,
+        **kwargs,
+    )
+#/def rangerMaldImportances
 
 def _collapse_cat_importance(
     coef: np.ndarray,
@@ -666,17 +688,19 @@ def _collapse_cat_importance(
 
 
 def lassoImportances(
-    X: pl.DataFrame,
-    Xk: pl.DataFrame,
-    y: pl.Series | pl.DataFrame,
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     fit_intercept: bool = True,
     exponent: float = 1.0,
     verbose: int = 0,
     **kwargs,
     ) -> np.ndarray:
-    
-    
+    X = _resolve_df(X)
+    Xk = _resolve_df(Xk)
+    y = _resolve_y(y)
+
     # Resolve outcome type and dimension
     outcomeDescriptor: OutcomeDescriptor = OutcomeDescriptor.infer(
         y = y,
@@ -882,9 +906,9 @@ def lassoImportances(
 #/def lassoImportances
 
 def ridgeImportances(
-    X: pl.DataFrame,
-    Xk: pl.DataFrame,
-    y: pl.Series | pl.DataFrame,
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     fit_intercept: bool = True,
     exponent: float = 1.0,
@@ -902,6 +926,10 @@ def ridgeImportances(
     All other logic (OHE, oheDict collapsing, multi-class Mahalanobis, exponent)
     is identical to lassoImportances.
     """
+    X = _resolve_df(X)
+    Xk = _resolve_df(Xk)
+    y = _resolve_y(y)
+
     outcomeDescriptor: OutcomeDescriptor = OutcomeDescriptor.infer(
         y = y,
         outcome_type = outcome_type,
@@ -1068,9 +1096,9 @@ def ridgeImportances(
 #/def ridgeImportances
 
 def elasticImportances(
-    X: pl.DataFrame,
-    Xk: pl.DataFrame,
-    y: pl.Series | pl.DataFrame,
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     l1_ratio: float = 0.5,
     fit_intercept: bool = True,
@@ -1089,6 +1117,10 @@ def elasticImportances(
     - categorical: sklearn LogisticRegressionCV with penalty='elasticnet',
                    l1_ratios=[l1_ratio], solver='saga'
     """
+    X = _resolve_df(X)
+    Xk = _resolve_df(Xk)
+    y = _resolve_y(y)
+
     if l1_ratio == 1.0:
         return lassoImportances(
             X = X, Xk = Xk, y = y,
