@@ -45,16 +45,20 @@ def _r_warnings_to_stdout():
 
     Both are restored on exit.
     """
-    _orig_cb = _r_cb.consolewrite_warnerror
+    _orig_warn_cb  = _r_cb.consolewrite_warnerror
+    _orig_print_cb = _r_cb.consolewrite_print
     with ( ro.default_converter ).context():
         _orig_warn: int = int( ro.r( 'getOption("warn")' )[0] )
-    _r_cb.consolewrite_warnerror = lambda s: (sys.stdout.write(s), sys.stdout.flush())
+    _writer = lambda s: (sys.stderr.write(s), sys.stderr.flush())
+    _r_cb.consolewrite_warnerror = _writer
+    _r_cb.consolewrite_print     = _writer
     with ( ro.default_converter ).context():
         ro.r( 'options(warn=1)' )
     try:
         yield
     finally:
-        _r_cb.consolewrite_warnerror = _orig_cb
+        _r_cb.consolewrite_warnerror = _orig_warn_cb
+        _r_cb.consolewrite_print     = _orig_print_cb
         with ( ro.default_converter ).context():
             ro.r( f'options(warn={_orig_warn})' )
     #/try/finally
@@ -421,6 +425,9 @@ def rangerGiniImportances(
     #
 
     _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("stat.forest.hetero_gini.R").read_text()
+
+    if verbose > 0:
+        kwargs = dict( kwargs, verbose = True )
 
     w_stats: np.ndarray
     with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):
