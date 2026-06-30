@@ -12,6 +12,7 @@ from torch.func import vmap, jacrev
 from torch.utils.data import DataLoader, TensorDataset
 
 import numpy as np
+import sys
 from tqdm import tqdm
 from typing import Callable, Iterable, Literal, Sequence, Self, Type
 
@@ -487,7 +488,7 @@ class PRISMPredictionModel:
 
         snapshots: list[np.ndarray] = []
 
-        with tqdm(total=self.epochs) as pbar:
+        with tqdm(total=self.epochs, file=sys.stderr, disable=False) as pbar:
             for stage_idx, lambda_b in enumerate(lambda_path):
                 optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
                 lb  = float(lambda_b)
