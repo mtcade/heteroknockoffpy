@@ -34,7 +34,7 @@ stat_forest_hetero_gini <- function( X, X_k, y, outcome.type = "continuous", ...
 
     vargs <- list( ... )
     if ( !( "respect.unordered.factors" %in% names( vargs ) ) )
-        vargs[[ "respect.unordered.factors" ]] <- "partition"
+        vargs[[ "respect.unordered.factors" ]] <- "order"
     if ( !( "min.node.size" %in% names( vargs ) ) && outcome.type %in% c( "categorical", "count" ) )
         vargs[[ "min.node.size" ]] <- 1L
 
