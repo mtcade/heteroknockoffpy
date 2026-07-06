@@ -300,7 +300,8 @@ def prismWImportances(
     a_path: Iterable[ float ] | None = None,
     batch_size: int | None = None,
     epochs: int = 500,
-    model_type: str = 'mlp',
+    model_type: str = 'pairwise',
+    n_warmup: int = 0,
     learning_rate: float = 0.01,
     drop_first: bool = True,
     dense_activation: str = 'relu',
@@ -313,6 +314,8 @@ def prismWImportances(
     At the end of each lambda stage the group norms ||w[:, group_j]||_F are recorded;
     the final importances are the mean over all snapshots.
 
+    :param model_type: see torchImportances.PRISMPredictionModel docstring for the full
+        list ('mlp', 'pairwise', 'additive', 'mlp_nu', 'pairwise_nu').
     :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
     :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
     :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
@@ -324,7 +327,7 @@ def prismWImportances(
         lambda_path = _DEFAULT_LAMBDA_PATH
     #
 
-    X_all_np, y_np, groups, _, loss_func, output_dimension, _ = _prism_setup(
+    X_all_np, y_np, groups, oheDict, loss_func, output_dimension, _ = _prism_setup(
         X = X, Xk = Xk, y = y,
         layers = layers,
         outcome_type = outcome_type,
@@ -344,7 +347,10 @@ def prismWImportances(
         learning_rate = learning_rate,
         epochs = epochs,
         model_type = model_type,
+        n_warmup = n_warmup,
         verbose = verbose,
+        groups = groups,
+        oheDict = oheDict,
     )
 
     snapshots: list[ np.ndarray ] = predictionModel.fit(
@@ -373,7 +379,8 @@ def prismGImportances(
     epochs: int = 500,
     bandwidth: float | None = None,
     exponent: float = 1.0,
-    model_type: str = 'mlp',
+    model_type: str = 'pairwise',
+    n_warmup: int = 0,
     learning_rate: float = 0.01,
     drop_first: bool = True,
     dense_activation: str = 'relu',
@@ -386,6 +393,8 @@ def prismGImportances(
     PRISM importances (auto_diff or bandwidth) of the current model are recorded.
     Delegates snapshot computation to _prismImportances_t.
 
+    :param model_type: see torchImportances.PRISMPredictionModel docstring for the full
+        list ('mlp', 'pairwise', 'additive', 'mlp_nu', 'pairwise_nu').
     :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite difference).
     :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
     :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
@@ -426,7 +435,10 @@ def prismGImportances(
         learning_rate = learning_rate,
         epochs = epochs,
         model_type = model_type,
+        n_warmup = n_warmup,
         verbose = verbose,
+        groups = groups,
+        oheDict = oheDict,
     )
 
     if outcomeDescriptor.outcome_type == 'categorical':
@@ -506,7 +518,8 @@ def prismGWImportances(
     epochs: int = 500,
     bandwidth: float | None = None,
     exponent: float = 1.0,
-    model_type: str = 'mlp',
+    model_type: str = 'pairwise',
+    n_warmup: int = 0,
     learning_rate: float = 0.01,
     drop_first: bool = True,
     dense_activation: str = 'relu',
@@ -519,6 +532,8 @@ def prismGWImportances(
     At each lambda stage the snapshot_fn records PRISM-W group norms as a side
     effect while returning PRISM-G local-gradient importances as the primary snapshot.
 
+    :param model_type: see torchImportances.PRISMPredictionModel docstring for the full
+        list ('mlp', 'pairwise', 'additive', 'mlp_nu', 'pairwise_nu').
     :returns: (g_importances, w_importances) both of shape (2*p,).
     """
     from . import torchImportances
@@ -557,7 +572,10 @@ def prismGWImportances(
         learning_rate = learning_rate,
         epochs = epochs,
         model_type = model_type,
+        n_warmup = n_warmup,
         verbose = verbose,
+        groups = groups,
+        oheDict = oheDict,
     )
 
     w_snapshots: list[ np.ndarray ] = []
@@ -704,7 +722,8 @@ def prismGLocalGradients(
     batch_size:        int | None = None,
     epochs:            int = 500,
     bandwidth:         float | None = None,
-    model_type:        str = 'mlp',
+    model_type:        str = 'pairwise',
+    n_warmup:          int = 0,
     learning_rate:     float = 0.01,
     drop_first:        bool = True,
     dense_activation:  str = 'relu',
@@ -740,7 +759,10 @@ def prismGLocalGradients(
         learning_rate    = learning_rate,
         epochs           = epochs,
         model_type       = model_type,
+        n_warmup         = n_warmup,
         verbose          = verbose,
+        groups           = groups,
+        oheDict          = oheDict,
     )
 
     predictionModel.fit(

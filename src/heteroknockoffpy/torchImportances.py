@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import numpy as np
 import sys
+from abc import ABC, abstractmethod
 from tqdm import tqdm
 from typing import Callable, Iterable, Literal, Sequence, Self, Type
 
@@ -27,7 +28,40 @@ def _prism_cycle(loader: DataLoader):
 
 # -- Network architectures
 
-class _PRISMNetworkMLP(nn.Module):
+class _PRISMNetworkBase(nn.Module, ABC):
+    """
+    Shared interface for all PRISM network architectures.
+
+    Subclasses implement forward / _precompute_group_reg / group_regularization /
+    get_group_importances on their own discrimination-layer tensors (they differ
+    per architecture, so no shared concrete body is provided for these).
+    """
+    @abstractmethod
+    def forward(self, z: torch.Tensor) -> torch.Tensor: ...
+
+    @abstractmethod
+    def _precompute_group_reg(self, groups: list[list[int]], device: str) -> None: ...
+
+    @abstractmethod
+    def group_regularization(
+        self,
+        lambda_val: float,
+        a: float,
+        groups: list[list[int]] | None = None,
+        eps: float = 1e-8,
+    ) -> torch.Tensor: ...
+
+    @abstractmethod
+    def get_group_importances(self, groups: list[list[int]]) -> np.ndarray: ...
+
+    def no_decay_parameters(self) -> list[nn.Parameter]:
+        """Parameters that should never receive weight_decay (e.g. warmup). Empty by default."""
+        return []
+    #/def no_decay_parameters
+#/class _PRISMNetworkBase
+
+
+class _PRISMNetworkMLP(_PRISMNetworkBase):
     """
     Flat MLP on 2p-dimensional augmented input [X, Xk].
     Group regularisation: differentiable block-Frobenius penalty over each group.
@@ -91,7 +125,7 @@ class _PRISMNetworkMLP(nn.Module):
 #/class _PRISMNetworkMLP
 
 
-class _PRISMNetworkPairwise(nn.Module):
+class _PRISMNetworkPairwise(_PRISMNetworkBase):
     """
     DeepPINK-style pairwise filter for p feature positions, followed by an MLP.
     Input: z of shape (n, 2p). Each OHE column at position j competes with its
@@ -164,7 +198,7 @@ class _PRISMNetworkPairwise(nn.Module):
 #/class _PRISMNetworkPairwise
 
 
-class _PRISMNetworkAdditive(nn.Module):
+class _PRISMNetworkAdditive(_PRISMNetworkBase):
     """
     Feature-wise additive MLP: one 2-input sub-network per input position, outputs summed.
     Input: z of shape (n, 2p) where the first p columns are X and the last p are Xk.
@@ -262,6 +296,183 @@ class _PRISMNetworkAdditive(nn.Module):
 #/class _PRISMNetworkAdditive
 
 
+class _PRISMNetworkCombiningMixin:
+    """
+    Shared combining-layer logic for the '_NU' (numeric-unified) architectures.
+
+    Before the discrimination layer, each categorical variable's one-hot dummy
+    columns are reduced to a single scalar via a per-variable linear map (no bias,
+    no activation), with the SAME weight applied to both the real and knockoff
+    one-hot blocks (tied, to preserve swap-antisymmetry). Numeric variables pass
+    straight through unchanged. Every variable (numeric or categorical) therefore
+    occupies exactly one column per side after combining.
+
+    x_groups: OHE column indices per variable, local to one p_ohe-wide side
+    (length n_vars). var_is_categorical: whether each variable is categorical,
+    sourced from oheDict's int/tuple distinction (NOT column count — a binary
+    categorical can have a single dummy after drop_first, indistinguishable from
+    numeric by column count alone).
+    """
+    def _init_combining(self, x_groups: list[list[int]], var_is_categorical: list[bool]) -> None:
+        self.n_vars = len(x_groups)
+        self.x_groups = x_groups
+        self.combine = nn.ModuleDict({
+            str(j): nn.Linear(len(g), 1, bias=False)
+            for j, g in enumerate(x_groups) if var_is_categorical[j]
+        })
+    #/def _init_combining
+
+    def _combine_side(self, side: torch.Tensor) -> torch.Tensor:
+        cols = [
+            self.combine[str(j)](side[:, g]) if str(j) in self.combine
+            else side[:, g[0]:g[0] + 1]
+            for j, g in enumerate(self.x_groups)
+        ]
+        return torch.cat(cols, dim=1)                                    # (batch, n_vars)
+    #/def _combine_side
+
+    def _combine(self, z: torch.Tensor) -> torch.Tensor:
+        p_ohe = z.shape[1] // 2
+        x, xt = z[:, :p_ohe], z[:, p_ohe:]
+        return torch.cat([self._combine_side(x), self._combine_side(xt)], dim=1)  # (batch, 2*n_vars)
+    #/def _combine
+
+    def no_decay_parameters(self) -> list[nn.Parameter]:
+        return list(self.combine.parameters())
+    #/def no_decay_parameters
+#/class _PRISMNetworkCombiningMixin
+
+
+class _PRISMNetworkMLP_NU(_PRISMNetworkCombiningMixin, _PRISMNetworkBase):
+    """
+    NU variant of _PRISMNetworkMLP: categorical variables are pre-combined into a
+    single tied scalar per side (see _PRISMNetworkCombiningMixin) before the flat
+    MLP discrimination layer, which now operates on 2*n_vars columns instead of
+    2*p_ohe. get_group_importances ignores the OHE-index content of `groups` and
+    uses only its length/position, since every variable is exactly one column here.
+    """
+    def __init__(
+        self,
+        layers: Sequence[int],
+        activation_class: Type[nn.Module],
+        x_groups: list[list[int]],
+        var_is_categorical: list[bool],
+        output_size: int = 1,
+    ) -> None:
+        super().__init__()
+        self._init_combining(x_groups, var_is_categorical)
+        self.output_size = output_size
+        dims = [2 * self.n_vars] + list(layers) + [output_size]
+        parts: list[nn.Module] = []
+        for i in range(len(dims) - 1):
+            parts.append(nn.Linear(dims[i], dims[i + 1]))
+            if i < len(dims) - 2:
+                parts.append(activation_class())
+        self.net = nn.Sequential(*parts)
+    #/def __init__
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        out = self.net(self._combine(z))
+        return out.squeeze(-1) if self.output_size == 1 else out
+    #/def forward
+
+    def _precompute_group_reg(self, groups: list[list[int]], device: str) -> None:
+        assert len(groups) == 2 * self.n_vars, \
+            f"NU get_group_importances expects len(groups)==2*n_vars ({2*self.n_vars}), got {len(groups)}"
+        self._n_groups = 2 * self.n_vars
+        self._col_to_group = torch.arange(2 * self.n_vars, dtype=torch.long, device=device)
+    #/def _precompute_group_reg
+
+    def group_regularization(
+        self,
+        lambda_val: float,
+        a: float,
+        groups: list[list[int]] | None = None,
+        eps: float = 1e-8,
+    ) -> torch.Tensor:
+        w      = self.net[0].weight                                     # (H, 2*n_vars)
+        col_sq = w.pow(2).sum(dim=0)                                    # (2*n_vars,)
+        return lambda_val * (col_sq + eps).pow(a).sum()
+    #/def group_regularization
+
+    def get_group_importances(self, groups: list[list[int]]) -> np.ndarray:
+        assert len(groups) == 2 * self.n_vars, \
+            f"NU get_group_importances expects len(groups)==2*n_vars ({2*self.n_vars}), got {len(groups)}"
+        with torch.no_grad():
+            w = self.net[0].weight.detach().cpu()
+            return np.array([torch.norm(w[:, i]).item() for i in range(2 * self.n_vars)])
+    #/def get_group_importances
+#/class _PRISMNetworkMLP_NU
+
+
+class _PRISMNetworkPairwise_NU(_PRISMNetworkCombiningMixin, _PRISMNetworkBase):
+    """
+    NU variant of _PRISMNetworkPairwise: categorical variables are pre-combined
+    into a single tied scalar per side before the DeepPINK-style swap filter,
+    which now operates on n_vars positions instead of p_ohe.
+    """
+    def __init__(
+        self,
+        layers: Sequence[int],
+        activation_class: Type[nn.Module],
+        x_groups: list[list[int]],
+        var_is_categorical: list[bool],
+        output_size: int = 1,
+    ) -> None:
+        super().__init__()
+        self._init_combining(x_groups, var_is_categorical)
+        self.output_size = output_size
+        self.v = nn.Parameter(torch.randn(2 * self.n_vars) * 0.1)
+        dims = [self.n_vars] + list(layers) + [output_size]
+        parts: list[nn.Module] = []
+        for i in range(len(dims) - 1):
+            parts.append(nn.Linear(dims[i], dims[i + 1]))
+            if i < len(dims) - 2:
+                parts.append(activation_class())
+        self.mlp = nn.Sequential(*parts)
+    #/def __init__
+
+    def _filter(self, z: torch.Tensor) -> torch.Tensor:
+        n = self.n_vars
+        x, xt = z[:, :n], z[:, n:]
+        v_x, v_xt = self.v[:n], self.v[n:]
+        alpha = v_x.abs() / (v_x.abs() + v_xt.abs() + 1e-8)
+        return alpha * x + (1.0 - alpha) * xt
+    #/def _filter
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        out = self.mlp(self._filter(self._combine(z)))
+        return out.squeeze(-1) if self.output_size == 1 else out
+    #/def forward
+
+    def _precompute_group_reg(self, groups: list[list[int]], device: str) -> None:
+        assert len(groups) == 2 * self.n_vars, \
+            f"NU get_group_importances expects len(groups)==2*n_vars ({2*self.n_vars}), got {len(groups)}"
+        self._n_groups = 2 * self.n_vars
+        self._col_to_group = torch.arange(2 * self.n_vars, dtype=torch.long, device=device)
+    #/def _precompute_group_reg
+
+    def group_regularization(
+        self,
+        lambda_val: float,
+        a: float,
+        groups: list[list[int]] | None = None,
+        eps: float = 1e-8,
+    ) -> torch.Tensor:
+        v_sq = self.v.pow(2)                                            # (2*n_vars,)
+        return lambda_val * (v_sq + eps).pow(a).sum()
+    #/def group_regularization
+
+    def get_group_importances(self, groups: list[list[int]]) -> np.ndarray:
+        assert len(groups) == 2 * self.n_vars, \
+            f"NU get_group_importances expects len(groups)==2*n_vars ({2*self.n_vars}), got {len(groups)}"
+        with torch.no_grad():
+            v = self.v.detach().cpu()
+            return np.array([v[i].abs().item() for i in range(2 * self.n_vars)])
+    #/def get_group_importances
+#/class _PRISMNetworkPairwise_NU
+
+
 # -- PRISM prediction model
 
 class PRISMPredictionModel:
@@ -270,9 +481,15 @@ class PRISMPredictionModel:
 
     model_type
     ----------
-    'mlp'      : flat MLP on full OHE input; full OHE group support
-    'pairwise' : DeepPINK pairwise filter + MLP; OHE columns treated as independent positions
-    'additive' : feature-wise additive sub-networks; OHE columns treated as independent positions
+    'mlp'         : flat MLP on full OHE input; full OHE group support
+    'pairwise'    : DeepPINK pairwise filter + MLP; OHE columns treated as independent positions
+    'additive'    : feature-wise additive sub-networks; OHE columns treated as independent positions
+    'mlp_nu'      : NU (numeric-unified) variant of 'mlp' — each categorical variable's
+                    one-hot dummies are pre-combined (tied linear, no bias/activation,
+                    unregularised) into a single scalar per side before the discrimination
+                    layer. Requires `groups` and `oheDict`.
+    'pairwise_nu' : NU variant of 'pairwise', same pre-combining step. Requires `groups`
+                    and `oheDict`.
 
     For 'pairwise' and 'additive', p = input_size // 2 (one sub-network per OHE column pair).
     Group regularisation uses block-Frobenius norms so multi-column OHE groups are
@@ -296,7 +513,7 @@ class PRISMPredictionModel:
         output_dimension: int = 1,
         learning_rate: float = 0.01,
         epochs: int = 500,
-        model_type: Literal['mlp','pairwise','additive',] = 'mlp',
+        model_type: Literal['mlp','pairwise','additive','mlp_nu','pairwise_nu',] = 'pairwise',
         n_warmup: int = 0,
         warmup_patience: int = 20,
         warmup_check_interval: int = 50,
@@ -304,6 +521,8 @@ class PRISMPredictionModel:
         warmup_val_frac: float = 0.2,
         warmup_weight_decay: float = 1e-4,
         verbose: int = 0,
+        groups: list[list[int]] | None = None,
+        oheDict: dict[str, int | tuple[int, ...]] | None = None,
     ) -> None:
         activation_class: Type[nn.Module]
         if isinstance(dense_activation, str):
@@ -342,6 +561,27 @@ class PRISMPredictionModel:
                 layers          = list(layers),
                 activation_class= activation_class,
                 output_size     = output_dimension,
+            ).to(self.device)
+        elif model_type in ('mlp_nu', 'pairwise_nu'):
+            if groups is None or oheDict is None:
+                raise ValueError(
+                    f"model_type={model_type!r} requires both `groups` and `oheDict`"
+                )
+            if input_size % 2 != 0:
+                raise ValueError(f"input_size must be even for model_type={model_type!r}; got {input_size}")
+            x_groups = groups[: len(groups) // 2]
+            # oheDict has one entry per variable per side (X columns, then Xk~ columns,
+            # in the same order _prism_setup used to build `groups`) — take the X-side half.
+            _ohe_keys = list(oheDict.keys())
+            _x_keys = _ohe_keys[: len(_ohe_keys) // 2]
+            var_is_categorical = [isinstance(oheDict[col], tuple) for col in _x_keys]
+            _nu_cls = _PRISMNetworkMLP_NU if model_type == 'mlp_nu' else _PRISMNetworkPairwise_NU
+            self.model = _nu_cls(
+                layers             = list(layers),
+                activation_class   = activation_class,
+                x_groups           = x_groups,
+                var_is_categorical = var_is_categorical,
+                output_size        = output_dimension,
             ).to(self.device)
         else:  # 'mlp'
             self.model = _PRISMNetworkMLP(
@@ -389,10 +629,15 @@ class PRISMPredictionModel:
 
         # ── Warmup ────────────────────────────────────────────────────────────
         if self.n_warmup > 0:
+            no_decay_ids    = {id(p) for p in self.model.no_decay_parameters()}
+            decay_params    = [p for p in self.model.parameters() if id(p) not in no_decay_ids]
+            no_decay_params = [p for p in self.model.parameters() if id(p) in no_decay_ids]
             warmup_opt = optim.Adam(
-                self.model.parameters(),
-                lr           = self.learning_rate,
-                weight_decay = self.warmup_weight_decay,
+                [
+                    {'params': decay_params,    'weight_decay': self.warmup_weight_decay},
+                    {'params': no_decay_params, 'weight_decay': 0.0},
+                ],
+                lr = self.learning_rate,
             )
 
             if self.warmup_val_frac > 0 and self.warmup_patience > 0:
