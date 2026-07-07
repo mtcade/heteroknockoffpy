@@ -14,6 +14,26 @@ pip install heteroknockoffpy
 
 `categorical_method='forest'` and `method='SCIP'` require R and `rpy2`. Install the `ranger` and `rangerKnockoff` R packages before using them.
 
+On macOS, `xgboost` requires OpenMP:
+
+```
+brew install libomp
+```
+
+### macOS: torch + xgboost run in separate processes automatically
+
+`torch` and `xgboost` each load their own copy of `libomp`, and having both in one process
+crashes on macOS. The public API handles this transparently: any `heteroknockoffpy.importance`
+`xgb*`/`prism*` call, and `knockoff.get_knockoffs(method="GAN_torch")`, automatically runs in an
+isolated subprocess whenever it would introduce the second library into a process that already
+has the other loaded — so mixing them in the same script or notebook just works, with no extra
+setup. Because this can spawn a subprocess, guard top-level driver code with
+`if __name__ == "__main__":`, per normal Python `multiprocessing` requirements.
+
+(If you bypass the public API and import `heteroknockoffpy.heteroknockofftorch.torchImportances`
+and `heteroknockoffpy.xgbImportances` directly yourself, this isolation doesn't apply —
+`./scripts/fix_xgboost_omp.sh` is available as a fallback for that case.)
+
 ---
 
 ## Knockoffs

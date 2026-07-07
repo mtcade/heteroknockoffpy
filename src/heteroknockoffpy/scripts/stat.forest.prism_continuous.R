@@ -21,7 +21,7 @@
 #'
 #' @param X_all   n x 2p data.frame: original X and knockoff X_k concatenated column-wise.
 #' @param y       Numeric vector of length n giving the continuous outcome.
-#' @param bandwidth       Scale multiplier for numeric bandwidth (multiplied by sd(col)/n^exponent).
+#' @param bandwidth       Scale multiplier for numeric bandwidth (multiplied by sd(col)/n^bandwidth.exponent).
 #' @param bandwidth.exponent  Exponent of sample size in bandwidth denominator.
 #' @param exponent  Power applied to each pointwise absolute importance before averaging.
 #' @param verbose   Print progress every `verbose` columns (0 = silent).

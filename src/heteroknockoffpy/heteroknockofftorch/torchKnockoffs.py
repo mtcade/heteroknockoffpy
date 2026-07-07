@@ -15,7 +15,7 @@ from tqdm import tqdm
 from typing import Literal, Sequence, Self, Type
 
 from .torchUtil import _nnModule_dict, _build_sequential
-from .utilities import DataFrameLike, _resolve_df
+from ..utilities import DataFrameLike, _resolve_df
 
 # -- KnockoffGAN networks
 

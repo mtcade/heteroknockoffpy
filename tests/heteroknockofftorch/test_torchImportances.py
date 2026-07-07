@@ -1,23 +1,42 @@
 #
-#//  test_vertical_prefit.py
+#//  tests/heteroknockofftorch/test_torchImportances.py
 #//  heteroknockoffpy
 #//
-#//  Structural tests for the vertical_prefit training method: build a prefit module,
-#//  do one forward/backward step, transfer into the real swap/discrimination
-#//  parameter, and check the transfer landed correctly -- no full lambda-path
-#//  training needed.
+#//  Verifies heteroknockofftorch.torchImportances is importable and exposes
+#//  its public API (PRISMPredictionModel.fit for each model type), plus
+#//  structural tests for the vertical_prefit training method: build a prefit
+#//  module, do one forward/backward step, transfer into the real
+#//  swap/discrimination parameter, and check the transfer landed correctly --
+#//  no full lambda-path training needed.
 #//
 import numpy as np
 import pytest
 import torch
 import torch.nn as nn
 
-from heteroknockoffpy.torchImportances import (
+from heteroknockoffpy.heteroknockofftorch.torchImportances import (
     PRISMPredictionModel,
     _PRISMNetworkMLP,
     _PRISMNetworkPairwise,
     _PRISMNetworkAdditive,
 )
+
+
+def test_torch_importances_importable():
+    # Construct and do a minimal fit for each model type.
+    rng = np.random.default_rng(0)
+    n, p = 60, 4
+    X_all = np.concatenate(
+        [rng.standard_normal((n, p)), rng.standard_normal((n, p))], axis=1
+    )
+    y = rng.standard_normal(n)
+    groups = [[j] for j in range(2 * p)]
+
+    for mt in ("mlp", "pairwise", "additive"):
+        m = PRISMPredictionModel(input_size=2 * p, layers=[8], model_type=mt, epochs=2)
+        snaps = m.fit(X_all, y, groups, lambda_path=np.logspace(-1, -2, 2))
+        assert np.array(snaps).shape == (2, 2 * p), f"{mt}: unexpected shape"
+
 
 P_OHE = 6          # input_size = 2*P_OHE
 X_GROUPS = [[0], [1], [2, 3, 4], [5]]

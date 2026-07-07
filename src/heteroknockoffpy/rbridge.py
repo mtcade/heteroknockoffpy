@@ -537,7 +537,8 @@ def rangerPrismImportances(
                 ro.default_converter + pandas2ri.converter
             ).context():
                 X_all_r = ro.conversion.get_conversion().py2rpy( X_all.to_pandas() )
-
+            #
+            
             if ot == 'categorical':
                 _y_series: pl.Series = y.to_series() if isinstance( y, pl.DataFrame ) else y
                 y_r = ro.FactorVector( _y_series.cast( pl.Utf8 ).to_list() )
@@ -547,7 +548,8 @@ def rangerPrismImportances(
                     else y.to_numpy().squeeze()
                 )
                 y_r = ro.FloatVector( _y_arr.astype( np.float64 ).tolist() )
-
+            #/if ot == 'categorical'/else
+            
             result_r = getattr( _prism, _fn )(
                 X_all_r, y_r,
                 **{ k.replace( '_', '.' ): v for k, v in kwargs.items() },
@@ -557,6 +559,9 @@ def rangerPrismImportances(
                 ro.default_converter + numpy2ri.converter
             ).context():
                 importances = np.asarray( result_r )
-
+            #
+        #/ro.default_converter.context()
+    #/with ( _r_warnings_to_stdout() ... )
+    
     return importances
 #/def rangerPrismImportances

@@ -177,7 +177,7 @@ def get_torchGAN(
     verbose_prefix: str = '',
     **kwargs,
     ) -> pl.DataFrame:
-    from . import torchKnockoffs
+    from .heteroknockofftorch import torchKnockoffs
 
     def knockoffCallable( x: np.ndarray ) -> np.ndarray:
         model = torchKnockoffs.TorchGAN(
@@ -298,7 +298,11 @@ def get_knockoffs(
             conditional_expectations = None
         #
         
-        Xk = get_torchGAN(
+        from . import _processIsolation
+        Xk = _processIsolation.run_isolated_if_loaded(
+            'xgboost',
+            'heteroknockoffpy.knockoff',
+            'get_torchGAN',
             X = X,
             rng = rng,
             conditional_expectations = conditional_expectations,

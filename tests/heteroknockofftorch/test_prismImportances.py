@@ -7,7 +7,7 @@ import polars as pl
 import pytest
 
 from heteroknockoffpy import importance
-from heteroknockoffpy.torchImportances import PRISMPredictionModel
+from heteroknockoffpy.heteroknockofftorch.torchImportances import PRISMPredictionModel
 
 
 def _make_synthetic(n: int = 200, p: int = 10, seed: int = 0):

@@ -17,10 +17,14 @@ dependencies = [
     "scikit-learn>=1.08",
     "statsmodels",
     "torch>=2.6.7",
+    "xgboost",
 ]
 
 license = "Apache-2.0"
 license-files = ["LICENSE"]
+
+[project.optional-dependencies]
+shap = ["shap"]
 
 [build-system]
 requires = ["uv_build>=0.11.23,<0.12"]
