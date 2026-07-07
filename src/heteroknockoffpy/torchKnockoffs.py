@@ -6,14 +6,16 @@
 #//
 
 import numpy as np
+import polars as pl
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import math
 from tqdm import tqdm
-from typing import Sequence, Self, Type
+from typing import Literal, Sequence, Self, Type
 
 from .torchUtil import _nnModule_dict, _build_sequential
+from .utilities import DataFrameLike, _resolve_df
 
 # -- KnockoffGAN networks
 
@@ -458,3 +460,4 @@ class TorchGAN(nn.Module):
         return Xk.cpu().numpy()
     #/def forward
 #/class TorchGAN
+

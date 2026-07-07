@@ -189,9 +189,11 @@ class TestGetOheDict:
             num_cols={"num": [1.0, 2.0, 3.0, 4.0]},
         )
         d = get_oheDict(df, drop_first=True)
-        # cat → (0, 1), num → 2
-        assert d["cat"] == (0, 1)
-        assert d["num"] == 2
+        # get_ohe_df/get_ohe_np place all non-categorical columns first, then
+        # each categorical column's dummy block -- so num → 0, cat → (1, 2),
+        # regardless of df's original column order ("cat" then "num" here).
+        assert d["num"] == 0
+        assert d["cat"] == (1, 2)
 
     def test_drop_first_false_includes_all_cats(self):
         df = _make_df(col=["a", "b", "c", "a"])

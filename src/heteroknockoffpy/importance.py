@@ -302,6 +302,9 @@ def prismWImportances(
     epochs: int = 500,
     model_type: str = 'pairwise',
     n_warmup: int = 0,
+    vertical_prefit: bool = False,
+    prefit_noise_std: float = 0.01,
+    reset_optimizer: bool = True,
     learning_rate: float = 0.01,
     drop_first: bool = True,
     dense_activation: str = 'relu',
@@ -315,7 +318,7 @@ def prismWImportances(
     the final importances are the mean over all snapshots.
 
     :param model_type: see torchImportances.PRISMPredictionModel docstring for the full
-        list ('mlp', 'pairwise', 'additive', 'mlp_nu', 'pairwise_nu').
+        list ('mlp', 'pairwise', 'additive').
     :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
     :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
     :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
@@ -348,9 +351,10 @@ def prismWImportances(
         epochs = epochs,
         model_type = model_type,
         n_warmup = n_warmup,
+        vertical_prefit = vertical_prefit,
+        prefit_noise_std = prefit_noise_std,
+        reset_optimizer = reset_optimizer,
         verbose = verbose,
-        groups = groups,
-        oheDict = oheDict,
     )
 
     snapshots: list[ np.ndarray ] = predictionModel.fit(
@@ -364,6 +368,113 @@ def prismWImportances(
 
     return np.mean( snapshots, axis = 0 )
 #/def prismWImportances
+
+
+def prismWImportancesPerOHE(
+    X: DataFrameLike,
+    Xk: DataFrameLike,
+    y: SeriesOrDataFrameLike,
+    layers: Sequence[ int ],
+    outcome_type: Literal['continuous','count','categorical',] | None = None,
+    lambda_path: Sequence[ float ] | None = None,
+    a_path: Iterable[ float ] | None = None,
+    batch_size: int | None = None,
+    epochs: int = 500,
+    model_type: Literal['mlp','pairwise',] = 'mlp',
+    n_warmup: int = 0,
+    vertical_prefit: bool = False,
+    prefit_noise_std: float = 0.01,
+    reset_optimizer: bool = True,
+    learning_rate: float = 0.01,
+    drop_first: bool = True,
+    dense_activation: str = 'relu',
+    verbose: int = 0,
+    ) -> np.ndarray:
+    """
+    PRISM-W importances, but every OHE dummy column is treated as its own independent
+    variable instead of being grouped back to one score per original variable.
+
+    Identical training procedure to prismWImportances, except `groups` is built as one
+    singleton per OHE column (a categorical variable's dummy columns are NOT bundled
+    into a shared group), so group_regularization/get_group_importances regularize and
+    report each dummy column independently. Collinearity between dummies of the same
+    variable is accepted; the group-lasso-style column penalty already regularizes it.
+
+    Only 'mlp' and 'pairwise' are supported: 'additive' does not extend naturally to
+    a per-dummy treatment.
+
+    :param model_type: 'mlp' or 'pairwise' only.
+    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
+    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
+    :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
+    :returns: Array of shape (2*p_ohe,) — first p_ohe entries for X's OHE-expanded columns,
+        last p_ohe for Xk's. p_ohe is the total OHE-expanded width per side (numeric columns
+        contribute 1 entry each, a K-category column contributes K-1 entries under
+        drop_first=True), NOT the original variable count.
+    """
+    from . import torchImportances
+
+    if model_type not in ( 'mlp', 'pairwise' ):
+        raise ValueError(
+            "prismWImportancesPerOHE only supports model_type in ('mlp','pairwise'); "
+            "got {!r}".format( model_type )
+        )
+    #
+
+    if lambda_path is None:
+        lambda_path = _DEFAULT_LAMBDA_PATH
+    #
+
+    X_all_np, y_np, _grouped_groups, oheDict, loss_func, output_dimension, _ = _prism_setup(
+        X = X, Xk = Xk, y = y,
+        layers = layers,
+        outcome_type = outcome_type,
+        drop_first = drop_first,
+    )
+
+    _mu = X_all_np.mean( axis=0 )
+    _sd = np.maximum( X_all_np.std( axis=0 ), 1e-8 )
+    X_all_np = ( X_all_np - _mu ) / _sd
+
+    # Flatten oheDict: one singleton group per OHE column, instead of grouping a
+    # categorical variable's dummy columns together.
+    groups: list[ list[int] ] = []
+    for col in oheDict:
+        col_idx = oheDict[ col ]
+        if isinstance( col_idx, int ):
+            groups.append( [ col_idx ] )
+        else:
+            groups.extend( [ idx ] for idx in col_idx )
+        #
+    #/for col in oheDict
+
+    predictionModel: torchImportances.PRISMPredictionModel = torchImportances.PRISMPredictionModel(
+        input_size = X_all_np.shape[1],
+        layers = list( layers ),
+        dense_activation = dense_activation,
+        loss_func = loss_func,
+        output_dimension = output_dimension,
+        learning_rate = learning_rate,
+        epochs = epochs,
+        model_type = model_type,
+        n_warmup = n_warmup,
+        vertical_prefit = vertical_prefit,
+        prefit_noise_std = prefit_noise_std,
+        reset_optimizer = reset_optimizer,
+        verbose = verbose,
+    )
+
+    snapshots: list[ np.ndarray ] = predictionModel.fit(
+        X = X_all_np,
+        y = y_np,
+        groups = groups,
+        lambda_path = lambda_path,
+        a_path = a_path,
+        batch_size = batch_size,
+    )
+
+    return np.mean( snapshots, axis = 0 )
+#/def prismWImportancesPerOHE
 
 
 def prismGImportances(
@@ -381,6 +492,9 @@ def prismGImportances(
     exponent: float = 1.0,
     model_type: str = 'pairwise',
     n_warmup: int = 0,
+    vertical_prefit: bool = False,
+    prefit_noise_std: float = 0.01,
+    reset_optimizer: bool = True,
     learning_rate: float = 0.01,
     drop_first: bool = True,
     dense_activation: str = 'relu',
@@ -394,7 +508,7 @@ def prismGImportances(
     Delegates snapshot computation to _prismImportances_t.
 
     :param model_type: see torchImportances.PRISMPredictionModel docstring for the full
-        list ('mlp', 'pairwise', 'additive', 'mlp_nu', 'pairwise_nu').
+        list ('mlp', 'pairwise', 'additive').
     :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite difference).
     :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
     :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
@@ -436,9 +550,10 @@ def prismGImportances(
         epochs = epochs,
         model_type = model_type,
         n_warmup = n_warmup,
+        vertical_prefit = vertical_prefit,
+        prefit_noise_std = prefit_noise_std,
+        reset_optimizer = reset_optimizer,
         verbose = verbose,
-        groups = groups,
-        oheDict = oheDict,
     )
 
     if outcomeDescriptor.outcome_type == 'categorical':
@@ -520,6 +635,9 @@ def prismGWImportances(
     exponent: float = 1.0,
     model_type: str = 'pairwise',
     n_warmup: int = 0,
+    vertical_prefit: bool = False,
+    prefit_noise_std: float = 0.01,
+    reset_optimizer: bool = True,
     learning_rate: float = 0.01,
     drop_first: bool = True,
     dense_activation: str = 'relu',
@@ -533,7 +651,7 @@ def prismGWImportances(
     effect while returning PRISM-G local-gradient importances as the primary snapshot.
 
     :param model_type: see torchImportances.PRISMPredictionModel docstring for the full
-        list ('mlp', 'pairwise', 'additive', 'mlp_nu', 'pairwise_nu').
+        list ('mlp', 'pairwise', 'additive').
     :returns: (g_importances, w_importances) both of shape (2*p,).
     """
     from . import torchImportances
@@ -573,9 +691,10 @@ def prismGWImportances(
         epochs = epochs,
         model_type = model_type,
         n_warmup = n_warmup,
+        vertical_prefit = vertical_prefit,
+        prefit_noise_std = prefit_noise_std,
+        reset_optimizer = reset_optimizer,
         verbose = verbose,
-        groups = groups,
-        oheDict = oheDict,
     )
 
     w_snapshots: list[ np.ndarray ] = []
@@ -724,6 +843,9 @@ def prismGLocalGradients(
     bandwidth:         float | None = None,
     model_type:        str = 'pairwise',
     n_warmup:          int = 0,
+    vertical_prefit:   bool = False,
+    prefit_noise_std:  float = 0.01,
+    reset_optimizer:   bool = True,
     learning_rate:     float = 0.01,
     drop_first:        bool = True,
     dense_activation:  str = 'relu',
@@ -760,9 +882,10 @@ def prismGLocalGradients(
         epochs           = epochs,
         model_type       = model_type,
         n_warmup         = n_warmup,
+        vertical_prefit  = vertical_prefit,
+        prefit_noise_std = prefit_noise_std,
+        reset_optimizer  = reset_optimizer,
         verbose          = verbose,
-        groups           = groups,
-        oheDict          = oheDict,
     )
 
     predictionModel.fit(

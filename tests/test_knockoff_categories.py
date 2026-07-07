@@ -271,3 +271,29 @@ class TestOheConsistency:
         result = get_ohe_df(Xk, drop_first=True, categories_override=override)
         # After dropping "col_0" (first lexical), remaining should be "col_1","col_2"
         assert result.columns == ["col_1", "col_2"]
+
+    def test_ohedict_indices_match_actual_ohe_column_order_when_interleaved(self):
+        """
+        get_ohe_df/get_ohe_np (via to_dummies) place all non-categorical columns
+        first, then append each categorical column's dummy block -- NOT X.columns'
+        original interleaved order. get_oheDict's indices must match this actual
+        layout, not just X.columns order, whenever a numeric column follows a
+        categorical one.
+        """
+        X = pl.DataFrame({
+            "x0": [1.0, 2.0, 3.0],
+            "x1": _cat_series("x1", ["a", "b", "c"]),
+            "x2": [4.0, 5.0, 6.0],
+        })
+        d = get_oheDict(X, drop_first=True)
+        actual_columns = get_ohe_df(X, drop_first=True).columns
+
+        for col, idx in d.items():
+            if isinstance(idx, int):
+                assert actual_columns[idx] == col
+            else:
+                for i, dummy_idx in enumerate(idx):
+                    assert actual_columns[dummy_idx].startswith(col)
+                #/for
+            #/if isinstance(idx, int)
+        #/for col, idx in d.items()

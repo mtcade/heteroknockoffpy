@@ -245,10 +245,10 @@ def get_knockoffs(
     verbose: int = 0,
     verbose_prefix: str = '',
     **kwargs,
-    ) -> pl.DataFrame:
+    ) -> pl.DataFrame | tuple[ pl.DataFrame, pl.DataFrame ]:
     """
         Interface to name the knockoff method by string
-        
+
         :param conditional_expectations: Necessary if kwargs['categorical_method'] == "scip"
     """
     numeric_columns: tuple[ str,... ] = tuple(

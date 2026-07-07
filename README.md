@@ -80,6 +80,8 @@ If `conditional_expectations=None` (the default) and `categorical_method='scip'`
 
 All importance functions return a `np.ndarray` of length `2p` — scores for `[x_1, …, x_p, x̃_1, …, x̃_p]`. Use `wFromImportances` to convert these to knockoff W-statistics for variable selection.
 
+**Note on categorical variables:** the PRISM importance functions (`prismWImportances`, `prismGImportances`, `prismGWImportances`, `prismWImportancesPerOHE`) are not effective at detecting per-category relevance for categorical variables. A categorical variable's contribution enters the model only through a discrete, latent set of one-hot dummy columns, and a sufficiently flexible nonlinear model can route a real effect through many different combinations of those columns' weights — unlike a continuous variable, there's no single identifiable direction for the swap statistic to key on. In practice this means PRISM power/FDR on categorical variables should not be trusted, even when the model appears to fit well; PRISM is best used for continuous (and to a lesser extent, count) variables.
+
 ### PRISM-W — `prismWImportances`
 
 Trains a single MLP on `[X, Xk]` while sweeping a lambda regularization path. Records first-layer column norms `‖W[:,j]‖₂` at the end of each lambda stage; the returned importances are the mean across all snapshots. Fast — no extra forward passes per snapshot.

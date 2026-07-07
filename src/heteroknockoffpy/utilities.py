@@ -177,6 +177,11 @@ def get_oheDict(
         Numeric columns map to a single int index; categorical columns map to
         a tuple of ints (one per dummy column after optional drop_first).
 
+        Matches `get_ohe_df`'s canonical column order: all non-categorical
+        columns first (in their original relative order), then each
+        categorical column's dummy block in turn -- NOT X.columns' original
+        interleaved order, since `to_dummies` moves dummy columns to the end.
+
         :param categories_override: When provided, use this as the category
             count for the named categorical columns instead of the unique values
             present in X.  Must match the override passed to get_ohe_df/np.
@@ -186,22 +191,28 @@ def get_oheDict(
     ohe_dict: dict[ str, int | tuple[ int,... ] ] = {}
     col_iterator: int = 0
 
-    for col in X.columns:
-        if X.schema[ col ] == pl.Categorical:
-            if categories_override and col in categories_override:
-                n_cats = len( categories_override[ col ] )
-            else:
-                n_cats = X[ col ].cast( pl.Utf8 ).n_unique()
-            ohe_dict[ col ] = tuple(
-                range( col_iterator, col_iterator + n_cats - counts_adjust )
-            )
-            col_iterator += ( n_cats - counts_adjust )
-        #
+    non_categorical_columns: list[ str ] = [
+        col for col in X.columns if X.schema[ col ] != pl.Categorical
+    ]
+    categorical_columns: list[ str ] = [
+        col for col in X.columns if X.schema[ col ] == pl.Categorical
+    ]
+
+    for col in non_categorical_columns:
+        ohe_dict[ col ] = col_iterator
+        col_iterator += 1
+    #/for col in non_categorical_columns
+
+    for col in categorical_columns:
+        if categories_override and col in categories_override:
+            n_cats = len( categories_override[ col ] )
         else:
-            ohe_dict[ col ] = col_iterator
-            col_iterator += 1
-        #/if X.schema[ col ] == pl.Categorical
-    #/for col in X.columns
+            n_cats = X[ col ].cast( pl.Utf8 ).n_unique()
+        ohe_dict[ col ] = tuple(
+            range( col_iterator, col_iterator + n_cats - counts_adjust )
+        )
+        col_iterator += ( n_cats - counts_adjust )
+    #/for col in categorical_columns
 
     return ohe_dict
 #/def get_oheDict

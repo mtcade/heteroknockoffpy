@@ -54,6 +54,35 @@ class _PRISMNetworkBase(nn.Module, ABC):
     @abstractmethod
     def get_group_importances(self, groups: list[list[int]]) -> np.ndarray: ...
 
+    @abstractmethod
+    def build_prefit_module(self) -> nn.Module:
+        """
+        Build a single-sided (p-wide, not 2p-wide) module for `vertical_prefit`
+        training: no swap/discrimination structure, just "some row's features" ->
+        prediction. Everything downstream of the swap layer (later net layers, mlp,
+        b1/W2/b2/activation, the tied `combine` module for NU variants) is shared by
+        reference, so training this module's parameters trains the real model's
+        shared parameters in place.
+        """
+        ...
+
+    @abstractmethod
+    def transfer_from_prefit(self, prefit_module: nn.Module, noise_std: float = 0.0) -> None:
+        """
+        After `vertical_prefit` training, install the pretrained single-sided
+        discrimination weights into the real (paired) swap/discrimination parameter
+        -- duplicated onto both the X and Xk halves for MLP-family/Additive, or a
+        symmetric `v = 0.5` for Pairwise-family (which had no discrimination
+        parameter active during pre-fit at all). An exact symmetric start is a
+        degenerate saddle point (both halves compute an identical function, so
+        there's no immediate gradient signal to prefer one over the other); if
+        `noise_std > 0`, independent N(0, noise_std) antisymmetric noise is added
+        to break the tie -- +noise on the X half, -noise on the Xk half (or
+        equivalently on `v`'s two halves) -- while keeping the two halves' *expected*
+        values equal.
+        """
+        ...
+
     def no_decay_parameters(self) -> list[nn.Parameter]:
         """Parameters that should never receive weight_decay (e.g. warmup). Empty by default."""
         return []
@@ -122,6 +151,23 @@ class _PRISMNetworkMLP(_PRISMNetworkBase):
                 for g in groups
             ])
     #/def get_group_importances
+
+    def build_prefit_module(self) -> nn.Module:
+        hidden, input_size = self.net[0].weight.shape
+        p_ohe = input_size // 2
+        prefit_first = nn.Linear(p_ohe, hidden)
+        return nn.Sequential(prefit_first, *list(self.net.children())[1:])
+    #/def build_prefit_module
+
+    def transfer_from_prefit(self, prefit_module: nn.Module, noise_std: float = 0.0) -> None:
+        prefit_first = prefit_module[0]
+        p_ohe = prefit_first.weight.shape[1]
+        with torch.no_grad():
+            noise = torch.randn_like(prefit_first.weight) * noise_std
+            self.net[0].weight[:, :p_ohe].copy_(prefit_first.weight + noise)
+            self.net[0].weight[:, p_ohe:].copy_(prefit_first.weight - noise)
+            self.net[0].bias.copy_(prefit_first.bias)
+    #/def transfer_from_prefit
 #/class _PRISMNetworkMLP
 
 
@@ -195,6 +241,21 @@ class _PRISMNetworkPairwise(_PRISMNetworkBase):
             v = self.v.detach().cpu()
             return np.array([v[g].norm().item() if g else 0.0 for g in groups])
     #/def get_group_importances
+
+    def build_prefit_module(self) -> nn.Module:
+        # self.mlp is already sized for single-sided (post-filter, p-wide) input --
+        # pre-fit trains it directly, in place, with no swap/filter step at all.
+        return self.mlp
+    #/def build_prefit_module
+
+    def transfer_from_prefit(self, prefit_module: nn.Module, noise_std: float = 0.0) -> None:
+        # prefit_module IS self.mlp (already trained in place); only self.v never
+        # participated in pre-fit, so it gets a fresh (anti)symmetric start.
+        with torch.no_grad():
+            noise = torch.randn(self.p, device=self.v.device) * noise_std
+            self.v[:self.p].copy_(0.5 + noise)
+            self.v[self.p:].copy_(0.5 - noise)
+    #/def transfer_from_prefit
 #/class _PRISMNetworkPairwise
 
 
@@ -293,184 +354,41 @@ class _PRISMNetworkAdditive(_PRISMNetworkBase):
                     result.append(W1[g, :, 0].norm().item())
             return np.array(result)
     #/def get_group_importances
+
+    def build_prefit_module(self) -> nn.Module:
+        p, h = self.W1.shape[0], self.W1.shape[1]
+        prefit_W1 = nn.Parameter(torch.randn(p, h) * 0.1)
+        activation, b1, W2, b2, output_size = self.activation, self.b1, self.W2, self.b2, self.output_size
+
+        class _AdditivePrefit(nn.Module):
+            def __init__(self_) -> None:
+                super().__init__()
+                self_.W1 = prefit_W1
+                self_.activation = activation
+                self_.b1 = b1
+                self_.W2 = W2
+                self_.b2 = b2
+
+            def forward(self_, x_single: torch.Tensor) -> torch.Tensor:
+                h_ = self_.activation(
+                    torch.einsum('np,ph->nph', x_single, self_.W1) + self_.b1
+                )
+                out_ = torch.einsum('nph,poh->npo', h_, self_.W2) + self_.b2
+                out_ = out_.sum(dim=1)
+                return out_.squeeze(-1) if output_size == 1 else out_
+            #/def forward
+        #/class _AdditivePrefit
+
+        return _AdditivePrefit()
+    #/def build_prefit_module
+
+    def transfer_from_prefit(self, prefit_module: nn.Module, noise_std: float = 0.0) -> None:
+        with torch.no_grad():
+            noise = torch.randn_like(prefit_module.W1) * noise_std
+            self.W1[:, :, 0].copy_(prefit_module.W1 + noise)
+            self.W1[:, :, 1].copy_(prefit_module.W1 - noise)
+    #/def transfer_from_prefit
 #/class _PRISMNetworkAdditive
-
-
-class _PRISMNetworkCombiningMixin:
-    """
-    Shared combining-layer logic for the '_NU' (numeric-unified) architectures.
-
-    Before the discrimination layer, each categorical variable's one-hot dummy
-    columns are reduced to a single scalar via a per-variable linear map (no bias,
-    no activation), with the SAME weight applied to both the real and knockoff
-    one-hot blocks (tied, to preserve swap-antisymmetry). Numeric variables pass
-    straight through unchanged. Every variable (numeric or categorical) therefore
-    occupies exactly one column per side after combining.
-
-    x_groups: OHE column indices per variable, local to one p_ohe-wide side
-    (length n_vars). var_is_categorical: whether each variable is categorical,
-    sourced from oheDict's int/tuple distinction (NOT column count — a binary
-    categorical can have a single dummy after drop_first, indistinguishable from
-    numeric by column count alone).
-    """
-    def _init_combining(self, x_groups: list[list[int]], var_is_categorical: list[bool]) -> None:
-        self.n_vars = len(x_groups)
-        self.x_groups = x_groups
-        self.combine = nn.ModuleDict({
-            str(j): nn.Linear(len(g), 1, bias=False)
-            for j, g in enumerate(x_groups) if var_is_categorical[j]
-        })
-    #/def _init_combining
-
-    def _combine_side(self, side: torch.Tensor) -> torch.Tensor:
-        cols = [
-            self.combine[str(j)](side[:, g]) if str(j) in self.combine
-            else side[:, g[0]:g[0] + 1]
-            for j, g in enumerate(self.x_groups)
-        ]
-        return torch.cat(cols, dim=1)                                    # (batch, n_vars)
-    #/def _combine_side
-
-    def _combine(self, z: torch.Tensor) -> torch.Tensor:
-        p_ohe = z.shape[1] // 2
-        x, xt = z[:, :p_ohe], z[:, p_ohe:]
-        return torch.cat([self._combine_side(x), self._combine_side(xt)], dim=1)  # (batch, 2*n_vars)
-    #/def _combine
-
-    def no_decay_parameters(self) -> list[nn.Parameter]:
-        return list(self.combine.parameters())
-    #/def no_decay_parameters
-#/class _PRISMNetworkCombiningMixin
-
-
-class _PRISMNetworkMLP_NU(_PRISMNetworkCombiningMixin, _PRISMNetworkBase):
-    """
-    NU variant of _PRISMNetworkMLP: categorical variables are pre-combined into a
-    single tied scalar per side (see _PRISMNetworkCombiningMixin) before the flat
-    MLP discrimination layer, which now operates on 2*n_vars columns instead of
-    2*p_ohe. get_group_importances ignores the OHE-index content of `groups` and
-    uses only its length/position, since every variable is exactly one column here.
-    """
-    def __init__(
-        self,
-        layers: Sequence[int],
-        activation_class: Type[nn.Module],
-        x_groups: list[list[int]],
-        var_is_categorical: list[bool],
-        output_size: int = 1,
-    ) -> None:
-        super().__init__()
-        self._init_combining(x_groups, var_is_categorical)
-        self.output_size = output_size
-        dims = [2 * self.n_vars] + list(layers) + [output_size]
-        parts: list[nn.Module] = []
-        for i in range(len(dims) - 1):
-            parts.append(nn.Linear(dims[i], dims[i + 1]))
-            if i < len(dims) - 2:
-                parts.append(activation_class())
-        self.net = nn.Sequential(*parts)
-    #/def __init__
-
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
-        out = self.net(self._combine(z))
-        return out.squeeze(-1) if self.output_size == 1 else out
-    #/def forward
-
-    def _precompute_group_reg(self, groups: list[list[int]], device: str) -> None:
-        assert len(groups) == 2 * self.n_vars, \
-            f"NU get_group_importances expects len(groups)==2*n_vars ({2*self.n_vars}), got {len(groups)}"
-        self._n_groups = 2 * self.n_vars
-        self._col_to_group = torch.arange(2 * self.n_vars, dtype=torch.long, device=device)
-    #/def _precompute_group_reg
-
-    def group_regularization(
-        self,
-        lambda_val: float,
-        a: float,
-        groups: list[list[int]] | None = None,
-        eps: float = 1e-8,
-    ) -> torch.Tensor:
-        w      = self.net[0].weight                                     # (H, 2*n_vars)
-        col_sq = w.pow(2).sum(dim=0)                                    # (2*n_vars,)
-        return lambda_val * (col_sq + eps).pow(a).sum()
-    #/def group_regularization
-
-    def get_group_importances(self, groups: list[list[int]]) -> np.ndarray:
-        assert len(groups) == 2 * self.n_vars, \
-            f"NU get_group_importances expects len(groups)==2*n_vars ({2*self.n_vars}), got {len(groups)}"
-        with torch.no_grad():
-            w = self.net[0].weight.detach().cpu()
-            return np.array([torch.norm(w[:, i]).item() for i in range(2 * self.n_vars)])
-    #/def get_group_importances
-#/class _PRISMNetworkMLP_NU
-
-
-class _PRISMNetworkPairwise_NU(_PRISMNetworkCombiningMixin, _PRISMNetworkBase):
-    """
-    NU variant of _PRISMNetworkPairwise: categorical variables are pre-combined
-    into a single tied scalar per side before the DeepPINK-style swap filter,
-    which now operates on n_vars positions instead of p_ohe.
-    """
-    def __init__(
-        self,
-        layers: Sequence[int],
-        activation_class: Type[nn.Module],
-        x_groups: list[list[int]],
-        var_is_categorical: list[bool],
-        output_size: int = 1,
-    ) -> None:
-        super().__init__()
-        self._init_combining(x_groups, var_is_categorical)
-        self.output_size = output_size
-        self.v = nn.Parameter(torch.randn(2 * self.n_vars) * 0.1)
-        dims = [self.n_vars] + list(layers) + [output_size]
-        parts: list[nn.Module] = []
-        for i in range(len(dims) - 1):
-            parts.append(nn.Linear(dims[i], dims[i + 1]))
-            if i < len(dims) - 2:
-                parts.append(activation_class())
-        self.mlp = nn.Sequential(*parts)
-    #/def __init__
-
-    def _filter(self, z: torch.Tensor) -> torch.Tensor:
-        n = self.n_vars
-        x, xt = z[:, :n], z[:, n:]
-        v_x, v_xt = self.v[:n], self.v[n:]
-        alpha = v_x.abs() / (v_x.abs() + v_xt.abs() + 1e-8)
-        return alpha * x + (1.0 - alpha) * xt
-    #/def _filter
-
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
-        out = self.mlp(self._filter(self._combine(z)))
-        return out.squeeze(-1) if self.output_size == 1 else out
-    #/def forward
-
-    def _precompute_group_reg(self, groups: list[list[int]], device: str) -> None:
-        assert len(groups) == 2 * self.n_vars, \
-            f"NU get_group_importances expects len(groups)==2*n_vars ({2*self.n_vars}), got {len(groups)}"
-        self._n_groups = 2 * self.n_vars
-        self._col_to_group = torch.arange(2 * self.n_vars, dtype=torch.long, device=device)
-    #/def _precompute_group_reg
-
-    def group_regularization(
-        self,
-        lambda_val: float,
-        a: float,
-        groups: list[list[int]] | None = None,
-        eps: float = 1e-8,
-    ) -> torch.Tensor:
-        v_sq = self.v.pow(2)                                            # (2*n_vars,)
-        return lambda_val * (v_sq + eps).pow(a).sum()
-    #/def group_regularization
-
-    def get_group_importances(self, groups: list[list[int]]) -> np.ndarray:
-        assert len(groups) == 2 * self.n_vars, \
-            f"NU get_group_importances expects len(groups)==2*n_vars ({2*self.n_vars}), got {len(groups)}"
-        with torch.no_grad():
-            v = self.v.detach().cpu()
-            return np.array([v[i].abs().item() for i in range(2 * self.n_vars)])
-    #/def get_group_importances
-#/class _PRISMNetworkPairwise_NU
 
 
 # -- PRISM prediction model
@@ -484,12 +402,6 @@ class PRISMPredictionModel:
     'mlp'         : flat MLP on full OHE input; full OHE group support
     'pairwise'    : DeepPINK pairwise filter + MLP; OHE columns treated as independent positions
     'additive'    : feature-wise additive sub-networks; OHE columns treated as independent positions
-    'mlp_nu'      : NU (numeric-unified) variant of 'mlp' — each categorical variable's
-                    one-hot dummies are pre-combined (tied linear, no bias/activation,
-                    unregularised) into a single scalar per side before the discrimination
-                    layer. Requires `groups` and `oheDict`.
-    'pairwise_nu' : NU variant of 'pairwise', same pre-combining step. Requires `groups`
-                    and `oheDict`.
 
     For 'pairwise' and 'additive', p = input_size // 2 (one sub-network per OHE column pair).
     Group regularisation uses block-Frobenius norms so multi-column OHE groups are
@@ -500,6 +412,22 @@ class PRISMPredictionModel:
     If n_warmup > 0, trains for up to n_warmup steps before the lambda_path loop using
     Adam with warmup_weight_decay. If warmup_patience > 0 and warmup_val_frac > 0, a
     hold-out val set is used for patience-based early stopping.
+
+    vertical_prefit
+    ---------------
+    If True, REPLACES the warmup phase above (same n_warmup step budget) with a
+    different procedure: X and Xk rows are vertically stacked into one (2n, p_ohe)
+    pool and randomly shuffled, so the network only ever sees "some row's features,"
+    never a paired [X,Xk] comparison. A single-sided (p-wide) version of the model
+    (`build_prefit_module`) is trained unregularized on this pool for n_warmup steps,
+    then `transfer_from_prefit` installs the pretrained weights into the real
+    swap/discrimination parameter (duplicated onto both halves for mlp/additive, or
+    v=0.5 for pairwise) before the normal lambda-path training proceeds. An exact
+    symmetric transfer is a degenerate saddle point (both
+    halves compute an identical function), so `prefit_noise_std` (default 0.01) adds
+    independent N(0, prefit_noise_std) antisymmetric noise -- +noise on the X half,
+    -noise on the Xk half -- to break the tie while keeping both halves' expected
+    values equal. Set to 0.0 for an exact symmetric transfer.
 
     Implements fit / predict / predict_t / auto_diff / auto_diff_t / jacobian_t.
     """
@@ -513,7 +441,7 @@ class PRISMPredictionModel:
         output_dimension: int = 1,
         learning_rate: float = 0.01,
         epochs: int = 500,
-        model_type: Literal['mlp','pairwise','additive','mlp_nu','pairwise_nu',] = 'pairwise',
+        model_type: Literal['mlp','pairwise','additive',] = 'pairwise',
         n_warmup: int = 0,
         warmup_patience: int = 20,
         warmup_check_interval: int = 50,
@@ -521,8 +449,9 @@ class PRISMPredictionModel:
         warmup_val_frac: float = 0.2,
         warmup_weight_decay: float = 1e-4,
         verbose: int = 0,
-        groups: list[list[int]] | None = None,
-        oheDict: dict[str, int | tuple[int, ...]] | None = None,
+        vertical_prefit: bool = False,
+        prefit_noise_std: float = 0.01,
+        reset_optimizer: bool = True,
     ) -> None:
         activation_class: Type[nn.Module]
         if isinstance(dense_activation, str):
@@ -543,6 +472,9 @@ class PRISMPredictionModel:
         self.warmup_val_frac        = warmup_val_frac
         self.warmup_weight_decay    = warmup_weight_decay
         self.verbose = verbose
+        self.vertical_prefit = vertical_prefit
+        self.prefit_noise_std = prefit_noise_std
+        self.reset_optimizer = reset_optimizer
 
         if model_type == 'pairwise':
             if input_size % 2 != 0:
@@ -561,27 +493,6 @@ class PRISMPredictionModel:
                 layers          = list(layers),
                 activation_class= activation_class,
                 output_size     = output_dimension,
-            ).to(self.device)
-        elif model_type in ('mlp_nu', 'pairwise_nu'):
-            if groups is None or oheDict is None:
-                raise ValueError(
-                    f"model_type={model_type!r} requires both `groups` and `oheDict`"
-                )
-            if input_size % 2 != 0:
-                raise ValueError(f"input_size must be even for model_type={model_type!r}; got {input_size}")
-            x_groups = groups[: len(groups) // 2]
-            # oheDict has one entry per variable per side (X columns, then Xk~ columns,
-            # in the same order _prism_setup used to build `groups`) — take the X-side half.
-            _ohe_keys = list(oheDict.keys())
-            _x_keys = _ohe_keys[: len(_ohe_keys) // 2]
-            var_is_categorical = [isinstance(oheDict[col], tuple) for col in _x_keys]
-            _nu_cls = _PRISMNetworkMLP_NU if model_type == 'mlp_nu' else _PRISMNetworkPairwise_NU
-            self.model = _nu_cls(
-                layers             = list(layers),
-                activation_class   = activation_class,
-                x_groups           = x_groups,
-                var_is_categorical = var_is_categorical,
-                output_size        = output_dimension,
             ).to(self.device)
         else:  # 'mlp'
             self.model = _PRISMNetworkMLP(
@@ -628,7 +539,9 @@ class PRISMPredictionModel:
         _use_minibatch = _bs < n
 
         # ── Warmup ────────────────────────────────────────────────────────────
-        if self.n_warmup > 0:
+        if self.n_warmup > 0 and self.vertical_prefit:
+            self._vertical_prefit(X_tensor, y_tensor, batch_size)
+        elif self.n_warmup > 0:
             no_decay_ids    = {id(p) for p in self.model.no_decay_parameters()}
             decay_params    = [p for p in self.model.parameters() if id(p) not in no_decay_ids]
             no_decay_params = [p for p in self.model.parameters() if id(p) in no_decay_ids]
@@ -733,9 +646,15 @@ class PRISMPredictionModel:
 
         snapshots: list[np.ndarray] = []
 
+        if not self.reset_optimizer:
+            optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        #
+
         with tqdm(total=self.epochs, file=sys.stderr, disable=False) as pbar:
             for stage_idx, lambda_b in enumerate(lambda_path):
-                optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+                if self.reset_optimizer:
+                    optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+                #
                 lb  = float(lambda_b)
                 a_b = _a_path[stage_idx] if _a_path is not None else lb
                 pbar.set_postfix({'lambda': f'{lb:.3g}'})
@@ -766,6 +685,53 @@ class PRISMPredictionModel:
 
         return snapshots
     #/def fit
+
+    def _vertical_prefit(
+        self: Self,
+        X_tensor: torch.Tensor,
+        y_tensor: torch.Tensor,
+        batch_size: int | None = None,
+    ) -> None:
+        """
+        Pretrain a single-sided (p-wide) version of the model on X and Xk rows
+        vertically stacked and randomly shuffled together (no paired comparison),
+        unregularized, for n_warmup steps -- then transfer the result into the real
+        swap/discrimination parameter. See `vertical_prefit` in the class docstring.
+        """
+        p_ohe = X_tensor.shape[1] // 2
+        X_stacked = torch.cat([X_tensor[:, :p_ohe], X_tensor[:, p_ohe:]], dim=0)
+        y_stacked = torch.cat([y_tensor, y_tensor], dim=0)
+        perm = torch.randperm(X_stacked.shape[0], device=self.device)
+        X_stacked, y_stacked = X_stacked[perm], y_stacked[perm]
+
+        n   = X_stacked.shape[0]
+        _bs = batch_size if batch_size is not None and batch_size < n else n
+        prefit_module = self.model.build_prefit_module().to(self.device)
+        prefit_opt = optim.Adam(prefit_module.parameters(), lr=self.learning_rate)
+
+        prefit_loader = DataLoader(
+            TensorDataset(X_stacked, y_stacked),
+            batch_size=_bs, shuffle=True,
+        )
+
+        prefit_module.train()
+        steps = 0
+        for Xb, yb in _prism_cycle(prefit_loader):
+            prefit_opt.zero_grad()
+            self.loss_func(prefit_module(Xb), yb).backward()
+            prefit_opt.step()
+            steps += 1
+            if steps >= self.n_warmup:
+                break
+            #
+        #/for Xb, yb in _prism_cycle(prefit_loader)
+
+        self.model.transfer_from_prefit(prefit_module, noise_std=self.prefit_noise_std)
+
+        if self.verbose:
+            print(f"  vertical_prefit: {steps} steps")
+        #/if self.verbose
+    #/def _vertical_prefit
 
     def get_group_importances(
         self: Self,
