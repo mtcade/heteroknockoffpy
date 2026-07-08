@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-"polars >=1.32, <2",
+    "polars>=1.32,<2",
     "numpy>=1.26.0",
     "knockpy",
     "rpy2>=3.6.4",
@@ -16,6 +16,7 @@ dependencies = [
     "pyarrow>=23.0.0",
     "scikit-learn>=1.08",
     "statsmodels",
+    "sympypl",
     "torch>=2.6.7",
     "xgboost",
 ]
@@ -34,3 +35,6 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.0.3",
 ]
+
+[tool.uv.sources]
+sympypl = { workspace = true }
