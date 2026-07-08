@@ -48,7 +48,6 @@ def prismWImportances(
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
-        'xgboost',
         'heteroknockoffpy.heteroknockofftorch.prismImportances',
         'prismWImportances',
         X = X, Xk = Xk, y = y,
@@ -115,7 +114,6 @@ def prismWImportancesPerOHE(
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
-        'xgboost',
         'heteroknockoffpy.heteroknockofftorch.prismImportances',
         'prismWImportancesPerOHE',
         X = X, Xk = Xk, y = y,
@@ -179,7 +177,6 @@ def prismGImportances(
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
-        'xgboost',
         'heteroknockoffpy.heteroknockofftorch.prismImportances',
         'prismGImportances',
         X = X, Xk = Xk, y = y,
@@ -241,7 +238,6 @@ def prismGWImportances(
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
-        'xgboost',
         'heteroknockoffpy.heteroknockofftorch.prismImportances',
         'prismGWImportances',
         X = X, Xk = Xk, y = y,
@@ -301,7 +297,6 @@ def prismGLocalGradients(
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
-        'xgboost',
         'heteroknockoffpy.heteroknockofftorch.prismImportances',
         'prismGLocalGradients',
         X = X, Xk = Xk, y = y,
@@ -334,8 +329,10 @@ def rangerGiniImportances(
     verbose: int = 0,
     **kwargs,
     ) -> np.ndarray:
-    from . import rbridge
-    return rbridge.rangerGiniImportances(
+    from . import _processIsolation
+    return _processIsolation.run_isolated_if_loaded(
+        'heteroknockoffpy.rbridge',
+        'rangerGiniImportances',
         X = X,
         Xk = Xk,
         y = y,
@@ -354,8 +351,10 @@ def rangerPrismImportances(
     verbose: int = 0,
     **kwargs,
     ) -> np.ndarray:
-    from . import rbridge
-    return rbridge.rangerPrismImportances(
+    from . import _processIsolation
+    return _processIsolation.run_isolated_if_loaded(
+        'heteroknockoffpy.rbridge',
+        'rangerPrismImportances',
         X = X,
         Xk = Xk,
         y = y,
@@ -380,11 +379,12 @@ def xgbImportances(
         fit on [X, Xk]. Categorical columns are handled natively by xgboost
         (tree_method='hist', enable_categorical=True), not one-hot encoded.
 
-        :param kwargs: Forwarded to XGBRegressor/XGBClassifier.fit
+        :param kwargs: model_kwargs (dict, forwarded to the XGBRegressor/XGBClassifier
+            constructor -- e.g. max_depth, n_estimators, learning_rate, subsample,
+            reg_alpha, ...), plus anything else forwarded to XGBRegressor/XGBClassifier.fit
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
-        'torch',
         'heteroknockoffpy.xgbImportances',
         'score_importances',
         X = X,
@@ -410,12 +410,13 @@ def xgbPrismImportances(
         Mirrors the R stat.forest.prism_{continuous,count,categorical}.R scripts,
         using xgboost's native categorical handling instead of one-hot encoding.
 
-        :param kwargs: bandwidth, bandwidth_exponent, exponent, plus anything else
+        :param kwargs: bandwidth, bandwidth_exponent, exponent, model_kwargs (dict,
+            forwarded to the XGBRegressor/XGBClassifier constructor -- e.g. max_depth,
+            n_estimators, learning_rate, subsample, reg_alpha, ...), plus anything else
             forwarded to XGBRegressor/XGBClassifier.fit
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
-        'torch',
         'heteroknockoffpy.xgbImportances',
         'prism_importances',
         X = X,
@@ -440,11 +441,12 @@ def xgbShapImportances(
 
         Requires the optional `shap` dependency: pip install heteroknockoffpy[shap]
 
-        :param kwargs: Forwarded to XGBRegressor/XGBClassifier.fit
+        :param kwargs: model_kwargs (dict, forwarded to the XGBRegressor/XGBClassifier
+            constructor -- e.g. max_depth, n_estimators, learning_rate, subsample,
+            reg_alpha, ...), plus anything else forwarded to XGBRegressor/XGBClassifier.fit
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
-        'torch',
         'heteroknockoffpy.xgbImportances',
         'shap_importances',
         X = X,

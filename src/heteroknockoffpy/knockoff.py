@@ -144,16 +144,18 @@ def get_second_order(
         
         :param conditional_expectations: Numeric conditional expectations. If not provided, uses `rbridge.get_forest_conditional_expectations` to calculate, if `categorical_method='scip'`
     """
-    from . import rbridge
-    
-    knockoffCallable: Callable[ [np.ndarray], np.ndarray ] = lambda x:\
-        rbridge.get_knockoffs_second_order_np(
+    from . import _processIsolation
+
+    def knockoffCallable( x: np.ndarray ) -> np.ndarray:
+        return _processIsolation.run_isolated_if_loaded(
+            'heteroknockoffpy.rbridge',
+            'get_knockoffs_second_order_np',
             X = x,
             verbose = verbose,
             verbose_prefix = verbose_prefix,
             #*kwargs
         )
-    #/
+    #/def knockoffCallable
     
     # TODO: #**kwargs
     return get_withCallable(
@@ -177,11 +179,13 @@ def get_torchGAN(
     verbose_prefix: str = '',
     **kwargs,
     ) -> pl.DataFrame:
-    from .heteroknockofftorch import torchKnockoffs
+    from . import _processIsolation
 
     def knockoffCallable( x: np.ndarray ) -> np.ndarray:
-        model = torchKnockoffs.TorchGAN(
-            shape          = x.shape,
+        return _processIsolation.run_isolated_if_loaded(
+            'heteroknockoffpy.heteroknockofftorch.torchKnockoffs',
+            'fit_predict',
+            x              = x,
             x_name         = kwargs.get( 'x_name',         'Normal' ),
             lamda          = kwargs.get( 'lamda',           1        ),
             mu             = kwargs.get( 'mu',              1        ),
@@ -191,8 +195,6 @@ def get_torchGAN(
             niter          = kwargs.get( 'niter',           2000     ),
             combined_inner = kwargs.get( 'combined_inner',  False    ),
         )
-        model.fit( x )
-        return model( x )
     #/def knockoffCallable
     
     return get_withCallable(
@@ -221,9 +223,11 @@ def get_SCIP(
             - `rangerKnockoff::create.forest.SCIP` for creating numeric knockoffs
             - Others: Passed to `ranger::ranger`
     """
-    from . import rbridge
-    
-    return rbridge.get_knockoffs_SCIP(
+    from . import _processIsolation
+
+    return _processIsolation.run_isolated_if_loaded(
+        'heteroknockoffpy.rbridge',
+        'get_knockoffs_SCIP',
         X = X,
         rng = rng,
         residuals_method = residuals_method,
@@ -298,11 +302,7 @@ def get_knockoffs(
             conditional_expectations = None
         #
         
-        from . import _processIsolation
-        Xk = _processIsolation.run_isolated_if_loaded(
-            'xgboost',
-            'heteroknockoffpy.knockoff',
-            'get_torchGAN',
+        Xk = get_torchGAN(
             X = X,
             rng = rng,
             conditional_expectations = conditional_expectations,

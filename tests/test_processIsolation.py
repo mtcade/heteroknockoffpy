@@ -42,10 +42,30 @@ def _sample_df() -> pl.DataFrame:
     })
 
 
-def test_run_isolated_if_loaded_in_process_when_other_module_absent():
+def _patch_guarded_modules(monkeypatch, own_native: str, other_native: str) -> None:
+    # heteroknockoffpy.utilities has no real native dependency, so it isn't a
+    # genuine entry in _GUARDED_MODULES -- stand one up for the duration of the
+    # test, paired with a second fake entry whose native module we control by
+    # choosing whether its name is already in sys.modules.
+    monkeypatch.setattr(
+        _processIsolation,
+        "_GUARDED_MODULES",
+        {
+            "heteroknockoffpy.utilities": own_native,
+            "this_module_definitely_does_not_exist_zzz.other_target": other_native,
+        },
+    )
+
+
+def test_run_isolated_if_loaded_in_process_when_no_conflict(monkeypatch):
+    # Neither entry's native module is loaded, so the call stays in-process.
+    _patch_guarded_modules(
+        monkeypatch,
+        own_native="own_native_definitely_does_not_exist_zzz",
+        other_native="other_native_definitely_does_not_exist_zzz",
+    )
     df = _sample_df()
     result = _processIsolation.run_isolated_if_loaded(
-        "this_module_definitely_does_not_exist_zzz",
         "heteroknockoffpy.utilities",
         "get_ohe_np",
         X=df, drop_first=True,
@@ -54,11 +74,17 @@ def test_run_isolated_if_loaded_in_process_when_other_module_absent():
     np.testing.assert_array_equal(result, get_ohe_np(df, drop_first=True))
 
 
-def test_run_isolated_if_loaded_isolated_when_other_module_present():
-    # 'sys' is always already imported, so this forces the subprocess branch.
+def test_run_isolated_if_loaded_isolated_when_conflict_present(monkeypatch):
+    # 'sys' is always already imported, so mapping the *other* entry to it
+    # forces the subprocess branch (the target's own native module is excluded
+    # from the conflict check, so it alone wouldn't trigger isolation).
+    _patch_guarded_modules(
+        monkeypatch,
+        own_native="own_native_definitely_does_not_exist_zzz",
+        other_native="sys",
+    )
     df = _sample_df()
     result = _processIsolation.run_isolated_if_loaded(
-        "sys",
         "heteroknockoffpy.utilities",
         "get_ohe_np",
         X=df, drop_first=True,
@@ -67,19 +93,27 @@ def test_run_isolated_if_loaded_isolated_when_other_module_present():
     np.testing.assert_array_equal(result, get_ohe_np(df, drop_first=True))
 
 
-def test_run_isolated_if_loaded_propagates_exceptions_in_process():
+def test_run_isolated_if_loaded_propagates_exceptions_in_process(monkeypatch):
+    _patch_guarded_modules(
+        monkeypatch,
+        own_native="own_native_definitely_does_not_exist_zzz",
+        other_native="other_native_definitely_does_not_exist_zzz",
+    )
     with pytest.raises(AttributeError):
         _processIsolation.run_isolated_if_loaded(
-            "this_module_definitely_does_not_exist_zzz",
             "heteroknockoffpy.utilities",
             "this_function_does_not_exist",
         )
 
 
-def test_run_isolated_if_loaded_propagates_exceptions_isolated():
+def test_run_isolated_if_loaded_propagates_exceptions_isolated(monkeypatch):
+    _patch_guarded_modules(
+        monkeypatch,
+        own_native="own_native_definitely_does_not_exist_zzz",
+        other_native="sys",
+    )
     with pytest.raises(AttributeError):
         _processIsolation.run_isolated_if_loaded(
-            "sys",
             "heteroknockoffpy.utilities",
             "this_function_does_not_exist",
         )

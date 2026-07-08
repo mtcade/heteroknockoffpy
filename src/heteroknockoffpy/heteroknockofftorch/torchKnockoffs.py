@@ -461,3 +461,35 @@ class TorchGAN(nn.Module):
     #/def forward
 #/class TorchGAN
 
+
+def fit_predict(
+    x: np.ndarray,
+    x_name: str = 'Normal',
+    lamda: float = 1,
+    mu: float = 1,
+    lam: float = 10,
+    lr: float = 1e-4,
+    mb_size: int = 128,
+    niter: int = 2000,
+    combined_inner: bool = False,
+) -> np.ndarray:
+    """
+    Trains a TorchGAN on x and returns its knockoff predictions. The leaf entry point
+    for get_torchGAN's isolated call -- keeps torch confined to this module so
+    _processIsolation can reliably decide whether to spawn a subprocess.
+    """
+    model = TorchGAN(
+        shape = x.shape,
+        x_name = x_name,
+        lamda = lamda,
+        mu = mu,
+        lam = lam,
+        lr = lr,
+        mb_size = mb_size,
+        niter = niter,
+        combined_inner = combined_inner,
+    )
+    model.fit(x)
+    return model(x)
+#/def fit_predict
+
