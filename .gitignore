@@ -20,3 +20,7 @@ tasks.txt
 
 # Reference-only, not-for-import code
 src/heteroknockoffpy/prism/
+
+# Workspace-member lockfile is vestigial; resolution happens at the
+# BigBrainStuff workspace root, not here.
+uv.lock
