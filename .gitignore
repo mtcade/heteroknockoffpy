@@ -17,3 +17,6 @@ wheels/
 
 # Scratch files
 tasks.txt
+
+# Reference-only, not-for-import code
+src/heteroknockoffpy/prism/
