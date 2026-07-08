@@ -468,6 +468,201 @@ def get_ohe_np(
     ).to_numpy()
 #/def get_ohe_np
 
+@dataclass
+class AR1SimpleCase:
+    X: pl.DataFrame
+    Xk: pl.DataFrame
+    y: np.ndarray
+    oracle: np.ndarray
+    function_str: str
+    relevant_vars: list[ str ]
+#/class AR1SimpleCase
+
+def get_ar1_simple_case(
+    n: int,
+    p_numeric: int,
+    p_categorical: int,
+    categories: int,
+    rho: float,
+    p_relevant: float,
+    noise_sd: float = 1.0,
+    oracle_knockoffs: bool = False,
+    rng: np.random.Generator | None = None,
+    knockoff_kwargs: dict | None = None,
+    ) -> AR1SimpleCase:
+    """
+        Build a simple mixed numeric/categorical knockoff test case from an
+        AR1 latent Gaussian model, with a known oracle E[y|X].
+
+        Numeric columns are latent values directly; categorical columns are
+        sampled from drop_first one-hot log weights (i.e. the latent values
+        for a categorical column are treated as logits for all categories
+        except the first, whose logit is implicitly 0).
+
+        The oracle mean function interacts groups of 2-3 relevant variables
+        (never an isolated main effect, never a full power set), with each
+        additive term's coefficient chosen so every term has ~unit variance.
+
+        :param p_relevant: Proportion (rounded) of numeric and, separately,
+            categorical variables that are relevant to the oracle.
+        :param oracle_knockoffs: If True, build numeric second-order
+            knockoffs of the raw Gaussian AR1 latent array itself, then
+            collapse both X and Xk from the latent/knockoff-latent arrays --
+            the statistically exact construction, since the true covariance
+            is known. If False, collapse X alone and derive Xk from it via
+            `knockoff.get_knockoffs`.
+        :param knockoff_kwargs: Passed to `knockoff.get_knockoffs` (if
+            `not oracle_knockoffs`) or to `rbridge.get_knockoffs_second_order_np`
+            (if `oracle_knockoffs`).
+    """
+    import sympy as sp
+    from sympypl import sympy_to_pl_expr, CatMap
+    from . import knockoff
+
+    if rng is None:
+        rng = np.random.default_rng()
+    #
+
+    knockoff_kwargs = knockoff_kwargs or {}
+
+    numeric_names: list[ str ] = [ 'num_{}'.format(i) for i in range(p_numeric) ]
+    categorical_names: list[ str ] = [ 'cat_{}'.format(i) for i in range(p_categorical) ]
+    category_labels: list[ str ] = [ str(i) for i in range(categories) ]
+
+    n_rel_numeric: int = round( p_relevant * p_numeric )
+    n_rel_categorical: int = round( p_relevant * p_categorical )
+    if n_rel_numeric + n_rel_categorical < 2:
+        raise ValueError(
+            "Need at least 2 relevant variables to form an interaction; "
+            "got {}".format( n_rel_numeric + n_rel_categorical )
+        )
+    #
+
+    L: int = p_numeric + p_categorical * ( categories - 1 )
+
+    latent_idx = np.arange( L )
+    Sigma: np.ndarray = rho ** np.abs( latent_idx[:,None] - latent_idx[None,:] )
+    chol: np.ndarray = np.linalg.cholesky( Sigma )
+    Z: np.ndarray = rng.standard_normal( (n, L) ) @ chol.T
+
+    placeholder: pl.DataFrame = pl.DataFrame(
+        {
+            **{
+                name: [ 0.0 ] * categories for name in numeric_names
+            },
+            **{
+                name: pl.Series( category_labels, dtype = pl.Utf8 ).cast( pl.Categorical )\
+                    for name in categorical_names
+            },
+        }
+    )
+    oheDict: dict[ str, int | tuple[ int,... ] ] = get_oheDict( placeholder, drop_first = True )
+
+    if oracle_knockoffs:
+        from . import rbridge
+
+        Zk: np.ndarray = rbridge.get_knockoffs_second_order_np(
+            X = Z,
+            **knockoff_kwargs,
+        )
+
+        X: pl.DataFrame = collapse_ohe(
+            X = placeholder, X_ohe = Z, oheDict = oheDict,
+            method = 'softmax', logit = True, drop_first = True, rng = rng,
+        )
+        Xk: pl.DataFrame = collapse_ohe(
+            X = placeholder, X_ohe = Zk, oheDict = oheDict,
+            method = 'softmax', logit = True, drop_first = True, rng = rng,
+        )
+    #
+    else:
+        X: pl.DataFrame = collapse_ohe(
+            X = placeholder, X_ohe = Z, oheDict = oheDict,
+            method = 'softmax', logit = True, drop_first = True, rng = rng,
+        )
+        Xk: pl.DataFrame = knockoff.get_knockoffs(
+            X, method = 'second_order', rng = rng,
+            categorical_method = 'ohe', **knockoff_kwargs,
+        )
+    #/if oracle_knockoffs/else
+
+    relevant_vars: list[ str ] = sorted(
+        rng.choice( numeric_names, size = n_rel_numeric, replace = False )
+    ) + sorted(
+        rng.choice( categorical_names, size = n_rel_categorical, replace = False )
+    )
+
+    groups: list[ list[ str ] ] = []
+    k: int = len( relevant_vars )
+    i: int = 0
+    if k % 2 == 1:
+        while i < k - 3:
+            groups.append( relevant_vars[ i:i+2 ] )
+            i += 2
+        #
+        groups.append( relevant_vars[ i:i+3 ] )
+    #
+    else:
+        while i < k:
+            groups.append( relevant_vars[ i:i+2 ] )
+            i += 2
+        #
+    #/if k % 2 == 1/else
+
+    bindings: dict[ sp.Symbol, str ] = {}
+    reps: dict[ str, sp.Expr ] = {}
+    for name in relevant_vars:
+        symbol: sp.Symbol = sp.Symbol( name )
+        bindings[ symbol ] = name
+        if name in categorical_names:
+            sorted_labels: list[ str ] = sorted( X[ name ].cat.get_categories().to_list() )
+            codes: dict[ str, int ] = { label: idx for idx, label in enumerate( sorted_labels ) }
+            realized_codes: np.ndarray = X[ name ].cast( pl.Utf8 ).replace_strict( codes ).to_numpy().astype( float )
+            code_mean: float = realized_codes.mean()
+            code_std: float = realized_codes.std()
+            reps[ name ] = CatMap.from_dict(
+                symbol,
+                {
+                    label: ( code - code_mean ) / code_std\
+                        for label, code in codes.items()
+                },
+            )
+        #
+        else:
+            col_mean: float = X[ name ].mean()
+            col_std: float = X[ name ].std()
+            reps[ name ] = ( symbol - col_mean ) / col_std
+        #/if name in categorical_names/else
+    #/for name in relevant_vars
+
+    final_terms: list[ sp.Expr ] = []
+    for group in groups:
+        term_expr: sp.Expr = sp.Mul( *( reps[ name ] for name in group ) )
+        raw_values: np.ndarray = X.select(
+            sympy_to_pl_expr( term_expr, bindings ).alias( '_term' )
+        )[ '_term' ].to_numpy()
+        term_std: float = raw_values.std()
+        coef: float = round( 1.0 / term_std, 2 )
+        final_terms.append( sp.Float( coef ) * term_expr )
+    #/for group in groups
+
+    oracle_expr: sp.Expr = sp.Add( *final_terms )
+    oracle: np.ndarray = X.select(
+        sympy_to_pl_expr( oracle_expr, bindings ).alias( '_oracle' )
+    )[ '_oracle' ].to_numpy()
+
+    y: np.ndarray = oracle + rng.normal( 0, noise_sd, n )
+
+    return AR1SimpleCase(
+        X = X,
+        Xk = Xk,
+        y = y,
+        oracle = oracle,
+        function_str = str( oracle_expr ),
+        relevant_vars = relevant_vars,
+    )
+#/def get_ar1_simple_case
+
 def get_linear_probabilities_for_column(
     X: pl.DataFrame,
     col: str,

@@ -20,6 +20,7 @@ import pytest
 
 from heteroknockoffpy.utilities import (
     collapse_ohe,
+    get_ar1_simple_case,
     get_ohe_df,
     get_ohe_np,
     get_oheDict,
@@ -499,3 +500,81 @@ class TestOheConsistency:
                 #/for
             #/if isinstance(idx, int)
         #/for col, idx in d.items()
+
+
+# ── get_ar1_simple_case ───────────────────────────────────────────────────────
+
+class TestGetAr1SimpleCase:
+
+    def test_shapes_and_schema_match(self):
+        case = get_ar1_simple_case(
+            n=80, p_numeric=3, p_categorical=2, categories=3, rho=0.5,
+            p_relevant=0.67, rng=np.random.default_rng(0),
+        )
+        assert len(case.X) == 80
+        assert len(case.Xk) == 80
+        assert case.X.schema == case.Xk.schema
+        assert case.oracle.shape == (80,)
+        assert case.y.shape == (80,)
+
+    def test_relevant_vars_count_and_membership(self):
+        case = get_ar1_simple_case(
+            n=50, p_numeric=4, p_categorical=2, categories=3, rho=0.3,
+            p_relevant=0.5, rng=np.random.default_rng(1),
+        )
+        expected_count = round(0.5 * 4) + round(0.5 * 2)
+        assert len(case.relevant_vars) == expected_count
+        for name in case.relevant_vars:
+            assert str(name) in case.X.columns
+
+    def test_function_str_mentions_every_relevant_var(self):
+        case = get_ar1_simple_case(
+            n=50, p_numeric=3, p_categorical=0, categories=2, rho=0.4,
+            p_relevant=1.0, rng=np.random.default_rng(2),
+        )
+        assert len(case.function_str) > 0
+        for name in case.relevant_vars:
+            assert str(name) in case.function_str
+
+    def test_deterministic_given_same_seed(self):
+        kwargs = dict(
+            n=40, p_numeric=2, p_categorical=1, categories=3, rho=0.5, p_relevant=1.0,
+        )
+        case_a = get_ar1_simple_case(**kwargs, rng=np.random.default_rng(7))
+        case_b = get_ar1_simple_case(**kwargs, rng=np.random.default_rng(7))
+        assert case_a.X.equals(case_b.X)
+        np.testing.assert_array_equal(case_a.oracle, case_b.oracle)
+
+    def test_pair_interaction_with_mixed_columns(self):
+        # p_numeric=1, p_categorical=1, categories=2, p_relevant=1.0 -> exactly
+        # 2 relevant vars, exercising the pair-group path.
+        case = get_ar1_simple_case(
+            n=60, p_numeric=1, p_categorical=1, categories=2, rho=0.5,
+            p_relevant=1.0, rng=np.random.default_rng(3),
+        )
+        assert len(case.relevant_vars) == 2
+
+    def test_triple_interaction_group(self):
+        # p_numeric=3, p_categorical=0, p_relevant=1.0 -> 3 relevant vars,
+        # exercising the odd-count triple-group path.
+        case = get_ar1_simple_case(
+            n=60, p_numeric=3, p_categorical=0, categories=2, rho=0.5,
+            p_relevant=1.0, rng=np.random.default_rng(4),
+        )
+        assert len(case.relevant_vars) == 3
+
+    def test_too_few_relevant_vars_raises(self):
+        with pytest.raises(ValueError):
+            get_ar1_simple_case(
+                n=30, p_numeric=1, p_categorical=0, categories=2, rho=0.3,
+                p_relevant=0.5, rng=np.random.default_rng(5),
+            )
+
+    def test_oracle_knockoffs_true(self):
+        case = get_ar1_simple_case(
+            n=60, p_numeric=2, p_categorical=1, categories=3, rho=0.3,
+            p_relevant=1.0, oracle_knockoffs=True, rng=np.random.default_rng(6),
+        )
+        assert len(case.X) == 60
+        assert len(case.Xk) == 60
+        assert case.X.schema == case.Xk.schema
