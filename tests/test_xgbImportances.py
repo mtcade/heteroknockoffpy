@@ -113,3 +113,91 @@ def test_shap_importances_continuous():
     assert imp.shape == (6,)
     assert np.all(np.isfinite(imp))
     assert np.all(imp >= 0)
+
+
+# ── model_kwargs ─────────────────────────────────────────────────────────────
+#
+# model_kwargs is forwarded from score_importances/prism_importances/
+# shap_importances, through _fit_model, into _make_model's XGBRegressor/
+# XGBClassifier constructor call. Test the forwarding directly against
+# _make_model/_fit_model (deterministic: inspect the constructed model's own
+# params) plus one integration test per public function (confirms the kwarg
+# doesn't break the public call path).
+
+@pytest.mark.parametrize("outcome_type", ["continuous", "count", "categorical"])
+def test_make_model_forwards_model_kwargs(outcome_type):
+    model = xgbImportances._make_model(
+        outcome_type, enable_categorical=False, max_depth=2, n_estimators=7,
+    )
+    params = model.get_params()
+    assert params["max_depth"] == 2
+    assert params["n_estimators"] == 7
+
+
+def test_make_model_without_model_kwargs_uses_xgboost_defaults():
+    model = xgbImportances._make_model("continuous", enable_categorical=False)
+    params = model.get_params()
+    assert params["max_depth"] is None
+    assert params["n_estimators"] is None
+
+
+def test_fit_model_forwards_model_kwargs():
+    X, Xk, x0, rng = _make_mixed_synthetic()
+    y = pl.Series("y", x0 + rng.standard_normal(len(x0)) * 0.5)
+
+    model, _, _, _ = xgbImportances._fit_model(
+        X=X, Xk=Xk, y=y, outcome_type="continuous", verbose=0,
+        model_kwargs={"max_depth": 3, "subsample": 0.5},
+    )
+    params = model.get_params()
+    assert params["max_depth"] == 3
+    assert params["subsample"] == 0.5
+
+
+def test_fit_model_model_kwargs_none_uses_defaults():
+    X, Xk, x0, rng = _make_mixed_synthetic()
+    y = pl.Series("y", x0 + rng.standard_normal(len(x0)) * 0.5)
+
+    model, _, _, _ = xgbImportances._fit_model(
+        X=X, Xk=Xk, y=y, outcome_type="continuous", verbose=0, model_kwargs=None,
+    )
+    assert model.get_params()["max_depth"] is None
+
+
+def test_score_importances_respects_model_kwargs():
+    X, Xk, x0, rng = _make_mixed_synthetic()
+    y = pl.Series("y", x0 + rng.standard_normal(len(x0)) * 0.5)
+
+    imp = xgbImportances.score_importances(
+        X=X, Xk=Xk, y=y, model_kwargs={"max_depth": 2, "n_estimators": 5},
+    )
+    assert imp.shape == (6,)
+    assert np.all(np.isfinite(imp))
+    assert np.all(imp >= 0)
+
+
+def test_prism_importances_respects_model_kwargs():
+    X, Xk, x0, rng = _make_mixed_synthetic()
+    y = pl.Series("y", x0 + rng.standard_normal(len(x0)) * 0.5)
+
+    imp = xgbImportances.prism_importances(
+        X=X, Xk=Xk, y=y, outcome_type="continuous",
+        model_kwargs={"max_depth": 2, "n_estimators": 5},
+    )
+    assert imp.shape == (6,)
+    assert np.all(np.isfinite(imp))
+    assert np.all(imp >= 0)
+
+
+def test_shap_importances_respects_model_kwargs():
+    pytest.importorskip("shap")
+    X, Xk, x0, rng = _make_mixed_synthetic()
+    y = pl.Series("y", x0 + rng.standard_normal(len(x0)) * 0.5)
+
+    imp = xgbImportances.shap_importances(
+        X=X, Xk=Xk, y=y, outcome_type="continuous",
+        model_kwargs={"max_depth": 2, "n_estimators": 5},
+    )
+    assert imp.shape == (6,)
+    assert np.all(np.isfinite(imp))
+    assert np.all(imp >= 0)

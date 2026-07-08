@@ -32,12 +32,14 @@ def _any_categorical(X_all: pl.DataFrame) -> bool:
 def _make_model(
     outcome_type: Literal['continuous','count','categorical',],
     enable_categorical: bool,
+    **model_kwargs,
     ) -> 'xgboost.XGBRegressor | xgboost.XGBClassifier':
     if outcome_type == 'continuous':
         return xgboost.XGBRegressor(
             objective = 'reg:squarederror',
             tree_method = 'hist',
             enable_categorical = enable_categorical,
+            **model_kwargs,
         )
     #
     elif outcome_type == 'count':
@@ -45,6 +47,7 @@ def _make_model(
             objective = 'count:poisson',
             tree_method = 'hist',
             enable_categorical = enable_categorical,
+            **model_kwargs,
         )
     #
     elif outcome_type == 'categorical':
@@ -53,6 +56,7 @@ def _make_model(
         return xgboost.XGBClassifier(
             tree_method = 'hist',
             enable_categorical = enable_categorical,
+            **model_kwargs,
         )
     #
     else:
@@ -86,8 +90,14 @@ def _fit_model(
     y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None,
     verbose: int,
+    model_kwargs: dict | None = None,
     **fit_kwargs,
-    ) -> tuple[ 'xgboost.XGBRegressor | xgboost.XGBClassifier', pl.DataFrame, pd.DataFrame, OutcomeDescriptor ]:
+    ) -> tuple[
+        xgboost.XGBRegressor | xgboost.XGBClassifier,
+        pl.DataFrame,
+        pd.DataFrame,
+        OutcomeDescriptor,
+    ]:
     X = _resolve_df( X )
     Xk = _resolve_df( Xk )
     y = _resolve_y( y )
@@ -104,7 +114,7 @@ def _fit_model(
     enable_categorical: bool = _any_categorical( X_all )
     X_all_pd: pd.DataFrame = X_all.to_pandas()
 
-    model = _make_model( outcomeDescriptor.outcome_type, enable_categorical )
+    model = _make_model( outcomeDescriptor.outcome_type, enable_categorical, **( model_kwargs or {} ) )
     y_fit: np.ndarray = _resolve_y_for_fit( y, outcomeDescriptor.outcome_type )
 
     if verbose > 0:
@@ -126,6 +136,7 @@ def score_importances(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     importance_type: Literal['weight','gain','cover','total_gain','total_cover',] = 'gain',
     verbose: int = 0,
+    model_kwargs: dict | None = None,
     **fit_kwargs,
     ) -> np.ndarray:
     """
@@ -133,10 +144,12 @@ def score_importances(
         from Booster.get_score(importance_type=importance_type), one per OHE-free
         column (numeric columns and native categorical columns alike).
 
+        :param model_kwargs: Forwarded to the XGBRegressor/XGBClassifier constructor
+            (e.g. max_depth, n_estimators, learning_rate, subsample, reg_alpha, ...).
         :param fit_kwargs: Forwarded to XGBRegressor/XGBClassifier.fit (e.g.
             sample_weight, eval_set, early_stopping_rounds).
     """
-    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, **fit_kwargs )
+    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, **fit_kwargs )
 
     score_dict: dict[ str, float ] = model.get_booster().get_score( importance_type = importance_type )
 
@@ -182,6 +195,7 @@ def prism_importances(
     bandwidth_exponent: float = 0.2,
     exponent: float = 1.0,
     verbose: int = 0,
+    model_kwargs: dict | None = None,
     **fit_kwargs,
     ) -> np.ndarray:
     """
@@ -196,9 +210,11 @@ def prism_importances(
         reduced via the Mahalanobis norm using the inverse covariance of the
         base contrasts.
 
+        :param model_kwargs: Forwarded to the XGBRegressor/XGBClassifier constructor
+            (e.g. max_depth, n_estimators, learning_rate, subsample, reg_alpha, ...).
         :param fit_kwargs: Forwarded to XGBRegressor/XGBClassifier.fit.
     """
-    model, X_all, X_all_pd, outcomeDescriptor = _fit_model( X, Xk, y, outcome_type, verbose, **fit_kwargs )
+    model, X_all, X_all_pd, outcomeDescriptor = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, **fit_kwargs )
     ot = outcomeDescriptor.outcome_type
 
     n: int = X_all_pd.shape[0]
@@ -308,6 +324,7 @@ def shap_importances(
     y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
+    model_kwargs: dict | None = None,
     **fit_kwargs,
     ) -> np.ndarray:
     """
@@ -315,11 +332,13 @@ def shap_importances(
 
         Requires the optional `shap` dependency: pip install heteroknockoffpy[shap]
 
+        :param model_kwargs: Forwarded to the XGBRegressor/XGBClassifier constructor
+            (e.g. max_depth, n_estimators, learning_rate, subsample, reg_alpha, ...).
         :param fit_kwargs: Forwarded to XGBRegressor/XGBClassifier.fit.
     """
     import shap
 
-    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, **fit_kwargs )
+    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, **fit_kwargs )
 
     explainer = shap.TreeExplainer( model )
     shap_values = explainer.shap_values( X_all_pd )
