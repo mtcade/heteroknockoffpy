@@ -250,7 +250,7 @@ def prism_importances(
     importances_pointwise: np.ndarray = np.zeros( ( n, p_all ) )
 
     for j, col in enumerate( X_all_pd.columns ):
-        if verbose > 0 and (j + 1) % verbose == 0:
+        if verbose > 0 and (j + 1) % 10 == 0:
             print( "xgbPrismImportances: column {} / {}".format( j + 1, p_all ) )
         #
 

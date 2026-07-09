@@ -1,0 +1,1172 @@
+{
+  "baseline": {
+    "n": 2000,
+    "p_numeric": 10,
+    "p_categorical": 5,
+    "categories": 4,
+    "rho": 0.5,
+    "p_relevant": 0.4,
+    "noise_sd": 0.5,
+    "oracle_knockoffs": false
+  },
+  "n_trials": 5,
+  "results": [
+    {
+      "param": "baseline",
+      "value": "baseline",
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.1619047619047619,
+            "std": 0.1493751156319821
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.13333333333333333,
+            "std": 0.1632993161855452
+          },
+          "f1": {
+            "mean": 0.9046153846153846,
+            "std": 0.08991777966893819
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.12380952380952381,
+            "std": 0.1227057021592869
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.06666666666666667,
+            "std": 0.13333333333333333
+          },
+          "f1": {
+            "mean": 0.9292307692307693,
+            "std": 0.07320232155920195
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": 0.0380952380952381,
+        "power_categorical": 0.0,
+        "fdr_categorical": 0.06666666666666667,
+        "f1": -0.024615384615384706
+      },
+      "max_abs_sep": 0.06666666666666667
+    },
+    {
+      "param": "categories",
+      "value": 2,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 2,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.16948051948051948,
+            "std": 0.17082242305757536
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.13333333333333333,
+            "std": 0.1632993161855452
+          },
+          "f1": {
+            "mean": 0.8972204266321914,
+            "std": 0.10955574821221808
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.07857142857142857,
+            "std": 0.1020204061220407
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "f1": {
+            "mean": 0.956043956043956,
+            "std": 0.05773154082006022
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": 0.09090909090909091,
+        "power_categorical": 0.0,
+        "fdr_categorical": 0.13333333333333333,
+        "f1": -0.05882352941176461
+      },
+      "max_abs_sep": 0.13333333333333333
+    },
+    {
+      "param": "categories",
+      "value": 3,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 3,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.02857142857142857,
+            "std": 0.05714285714285714
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "f1": {
+            "mean": 0.9846153846153847,
+            "std": 0.03076923076923075
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.08571428571428572,
+            "std": 0.06998542122237651
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.06666666666666667,
+            "std": 0.13333333333333333
+          },
+          "f1": {
+            "mean": 0.953846153846154,
+            "std": 0.03768445758127963
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": -0.05714285714285715,
+        "power_categorical": 0.0,
+        "fdr_categorical": -0.06666666666666667,
+        "f1": 0.03076923076923066
+      },
+      "max_abs_sep": 0.06666666666666667
+    },
+    {
+      "param": "categories",
+      "value": 8,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 8,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.15,
+            "std": 0.19999999999999998
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.06666666666666667,
+            "std": 0.13333333333333333
+          },
+          "f1": {
+            "mean": 0.9047619047619048,
+            "std": 0.13127665478181164
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.22857142857142856,
+            "std": 0.23629797860726096
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.30666666666666664,
+            "std": 0.26865922239479845
+          },
+          "f1": {
+            "mean": 0.8489010989010989,
+            "std": 0.16609409356421512
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": -0.07857142857142857,
+        "power_categorical": 0.0,
+        "fdr_categorical": -0.24,
+        "f1": 0.055860805860805884
+      },
+      "max_abs_sep": 0.24
+    },
+    {
+      "param": "rho",
+      "value": 0.0,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.0,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.02857142857142857,
+            "std": 0.05714285714285714
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.06666666666666667,
+            "std": 0.13333333333333333
+          },
+          "f1": {
+            "mean": 0.9846153846153847,
+            "std": 0.03076923076923075
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.05,
+            "std": 0.1
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.1,
+            "std": 0.2
+          },
+          "f1": {
+            "mean": 0.9714285714285713,
+            "std": 0.05714285714285716
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": -0.021428571428571432,
+        "power_categorical": 0.0,
+        "fdr_categorical": -0.03333333333333334,
+        "f1": 0.013186813186813362
+      },
+      "max_abs_sep": 0.03333333333333334
+    },
+    {
+      "param": "rho",
+      "value": 0.3,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.3,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "f1": {
+            "mean": 1.0,
+            "std": 0.0
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.17857142857142855,
+            "std": 0.18626292586293283
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.1,
+            "std": 0.20000000000000004
+          },
+          "f1": {
+            "mean": 0.8893772893772894,
+            "std": 0.12349049648628918
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": -0.17857142857142855,
+        "power_categorical": 0.0,
+        "fdr_categorical": -0.1,
+        "f1": 0.11062271062271056
+      },
+      "max_abs_sep": 0.17857142857142855
+    },
+    {
+      "param": "rho",
+      "value": 0.7,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.7,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.09523809523809523,
+            "std": 0.13127665478181164
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.06666666666666667,
+            "std": 0.13333333333333333
+          },
+          "f1": {
+            "mean": 0.9446153846153846,
+            "std": 0.0782047078593159
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.14805194805194805,
+            "std": 0.166030720150617
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.18666666666666668,
+            "std": 0.2436755584332942
+          },
+          "f1": {
+            "mean": 0.9104072398190045,
+            "std": 0.10789364805566554
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": -0.05281385281385281,
+        "power_categorical": 0.0,
+        "fdr_categorical": -0.12000000000000001,
+        "f1": 0.034208144796380124
+      },
+      "max_abs_sep": 0.12000000000000001
+    },
+    {
+      "param": "rho",
+      "value": 0.9,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.9,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 0.5666666666666667,
+            "std": 0.4666666666666667
+          },
+          "fdr": {
+            "mean": 0.17619047619047618,
+            "std": 0.20952380952380953
+          },
+          "power_categorical": {
+            "mean": 0.6,
+            "std": 0.48989794855663565
+          },
+          "fdr_categorical": {
+            "mean": 0.12,
+            "std": 0.24000000000000002
+          },
+          "f1": {
+            "mean": 0.4712820512820513,
+            "std": 0.3989941330542378
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.18571428571428572,
+            "std": 0.16659862556700858
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.12,
+            "std": 0.24
+          },
+          "f1": {
+            "mean": 0.8871794871794872,
+            "std": 0.11421055103241073
+          }
+        }
+      },
+      "separation": {
+        "power": -0.43333333333333335,
+        "fdr": -0.009523809523809545,
+        "power_categorical": -0.4,
+        "fdr_categorical": 0.0,
+        "f1": -0.41589743589743594
+      },
+      "max_abs_sep": 0.43333333333333335
+    },
+    {
+      "param": "p_numeric",
+      "value": 20,
+      "params": {
+        "n": 2000,
+        "p_numeric": 20,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 0.9800000000000001,
+            "std": 0.039999999999999994
+          },
+          "fdr": {
+            "mean": 0.1463869463869464,
+            "std": 0.146222050164517
+          },
+          "power_categorical": {
+            "mean": 0.9,
+            "std": 0.2
+          },
+          "fdr_categorical": {
+            "mean": 0.26666666666666666,
+            "std": 0.2494438257849294
+          },
+          "f1": {
+            "mean": 0.9069979296066253,
+            "std": 0.09620772049573062
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.2545454545454545,
+            "std": 0.2004127971368055
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.31999999999999995,
+            "std": 0.1904380914278093
+          },
+          "f1": {
+            "mean": 0.838095238095238,
+            "std": 0.13997084244475302
+          }
+        }
+      },
+      "separation": {
+        "power": -0.019999999999999907,
+        "fdr": -0.10815850815850811,
+        "power_categorical": -0.09999999999999998,
+        "fdr_categorical": -0.05333333333333329,
+        "f1": 0.06890269151138728
+      },
+      "max_abs_sep": 0.10815850815850811
+    },
+    {
+      "param": "p_numeric",
+      "value": 40,
+      "params": {
+        "n": 2000,
+        "p_numeric": 40,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 0.9444444444444444,
+            "std": 0.06085806194501844
+          },
+          "fdr": {
+            "mean": 0.23655470965815795,
+            "std": 0.09343704741426209
+          },
+          "power_categorical": {
+            "mean": 0.7,
+            "std": 0.4
+          },
+          "fdr_categorical": {
+            "mean": 0.16666666666666666,
+            "std": 0.21081851067789198
+          },
+          "f1": {
+            "mean": 0.8408703017773569,
+            "std": 0.06800836462179095
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 0.9777777777777779,
+            "std": 0.04444444444444447
+          },
+          "fdr": {
+            "mean": 0.23830343569474008,
+            "std": 0.0989724642736464
+          },
+          "power_categorical": {
+            "mean": 0.8,
+            "std": 0.4
+          },
+          "fdr_categorical": {
+            "mean": 0.26666666666666666,
+            "std": 0.38873012632302006
+          },
+          "f1": {
+            "mean": 0.8541743493989966,
+            "std": 0.07583481747311105
+          }
+        }
+      },
+      "separation": {
+        "power": -0.03333333333333344,
+        "fdr": -0.0017487260365821322,
+        "power_categorical": -0.10000000000000009,
+        "fdr_categorical": -0.1,
+        "f1": -0.013304047621639725
+      },
+      "max_abs_sep": 0.10000000000000009
+    },
+    {
+      "param": "p_categorical",
+      "value": 2,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 2,
+        "categories": 4,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.03333333333333333,
+            "std": 0.06666666666666667
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "f1": {
+            "mean": 0.9818181818181818,
+            "std": 0.036363636363636376
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "f1": {
+            "mean": 1.0,
+            "std": 0.0
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": 0.03333333333333333,
+        "power_categorical": 0.0,
+        "fdr_categorical": 0.0,
+        "f1": -0.018181818181818188
+      },
+      "max_abs_sep": 0.03333333333333333
+    },
+    {
+      "param": "p_categorical",
+      "value": 10,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 10,
+        "categories": 4,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.3327383727383727,
+            "std": 0.12847720582817299
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.3180952380952381,
+            "std": 0.10250380226341874
+          },
+          "f1": {
+            "mean": 0.7936222793673327,
+            "std": 0.0884638283186505
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.23692307692307693,
+            "std": 0.15625689553051025
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.21333333333333332,
+            "std": 0.12220201853215573
+          },
+          "f1": {
+            "mean": 0.8562172695165022,
+            "std": 0.10614160028792094
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": 0.09581529581529577,
+        "power_categorical": 0.0,
+        "fdr_categorical": 0.10476190476190478,
+        "f1": -0.06259499014916958
+      },
+      "max_abs_sep": 0.10476190476190478
+    },
+    {
+      "param": "n",
+      "value": 300,
+      "params": {
+        "n": 300,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 0.16666666666666669,
+            "std": 0.33333333333333337
+          },
+          "fdr": {
+            "mean": 0.03333333333333333,
+            "std": 0.06666666666666667
+          },
+          "power_categorical": {
+            "mean": 0.2,
+            "std": 0.4
+          },
+          "fdr_categorical": {
+            "mean": 0.06666666666666667,
+            "std": 0.13333333333333333
+          },
+          "f1": {
+            "mean": 0.16666666666666669,
+            "std": 0.33333333333333337
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 0.2,
+            "std": 0.4
+          },
+          "fdr": {
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "power_categorical": {
+            "mean": 0.2,
+            "std": 0.4
+          },
+          "fdr_categorical": {
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "f1": {
+            "mean": 0.2,
+            "std": 0.4
+          }
+        }
+      },
+      "separation": {
+        "power": -0.033333333333333326,
+        "fdr": 0.03333333333333333,
+        "power_categorical": 0.0,
+        "fdr_categorical": 0.06666666666666667,
+        "f1": -0.033333333333333326
+      },
+      "max_abs_sep": 0.06666666666666667
+    },
+    {
+      "param": "n",
+      "value": 1000,
+      "params": {
+        "n": 1000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.5,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.41428571428571426,
+            "std": 0.1366509033550642
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.38666666666666666,
+            "std": 0.2114500203620494
+          },
+          "f1": {
+            "mean": 0.7295238095238095,
+            "std": 0.10700626213476676
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.4872460872460872,
+            "std": 0.08612920843194642
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.42000000000000004,
+            "std": 0.11075498483890767
+          },
+          "f1": {
+            "mean": 0.6738080495356037,
+            "std": 0.07206579163084831
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": -0.07296037296037294,
+        "power_categorical": 0.0,
+        "fdr_categorical": -0.03333333333333338,
+        "f1": 0.05571575998820577
+      },
+      "max_abs_sep": 0.07296037296037294
+    },
+    {
+      "param": "noise_sd",
+      "value": 1.0,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 1.0,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.10714285714285714,
+            "std": 0.09583148474999098
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.13333333333333333,
+            "std": 0.1632993161855452
+          },
+          "f1": {
+            "mean": 0.9406593406593406,
+            "std": 0.054103444505895264
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.07857142857142857,
+            "std": 0.10202040612204072
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.06666666666666667,
+            "std": 0.13333333333333333
+          },
+          "f1": {
+            "mean": 0.956043956043956,
+            "std": 0.05773154082006022
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": 0.028571428571428567,
+        "power_categorical": 0.0,
+        "fdr_categorical": 0.06666666666666667,
+        "f1": -0.01538461538461533
+      },
+      "max_abs_sep": 0.06666666666666667
+    },
+    {
+      "param": "noise_sd",
+      "value": 0.25,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.25,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.15,
+            "std": 0.12247448713915891
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.06666666666666667,
+            "std": 0.13333333333333333
+          },
+          "f1": {
+            "mean": 0.9142857142857143,
+            "std": 0.06998542122237654
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.05714285714285714,
+            "std": 0.06998542122237653
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.0,
+            "std": 0.0
+          },
+          "f1": {
+            "mean": 0.9692307692307693,
+            "std": 0.03768445758127964
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": 0.09285714285714286,
+        "power_categorical": 0.0,
+        "fdr_categorical": 0.06666666666666667,
+        "f1": -0.05494505494505508
+      },
+      "max_abs_sep": 0.09285714285714286
+    },
+    {
+      "param": "noise_sd",
+      "value": 0.1,
+      "params": {
+        "n": 2000,
+        "p_numeric": 10,
+        "p_categorical": 5,
+        "categories": 4,
+        "rho": 0.5,
+        "p_relevant": 0.4,
+        "noise_sd": 0.1,
+        "oracle_knockoffs": false
+      },
+      "summary": {
+        "score_gain": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.12,
+            "std": 0.24000000000000002
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.12,
+            "std": 0.24000000000000002
+          },
+          "f1": {
+            "mean": 0.9142857142857143,
+            "std": 0.17142857142857137
+          }
+        },
+        "prism": {
+          "power": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr": {
+            "mean": 0.06666666666666667,
+            "std": 0.13333333333333333
+          },
+          "power_categorical": {
+            "mean": 1.0,
+            "std": 0.0
+          },
+          "fdr_categorical": {
+            "mean": 0.1,
+            "std": 0.20000000000000004
+          },
+          "f1": {
+            "mean": 0.96,
+            "std": 0.07999999999999999
+          }
+        }
+      },
+      "separation": {
+        "power": 0.0,
+        "fdr": 0.05333333333333333,
+        "power_categorical": 0.0,
+        "fdr_categorical": 0.01999999999999999,
+        "f1": -0.04571428571428571
+      },
+      "max_abs_sep": 0.05333333333333333
+    }
+  ],
+  "total_wall_seconds": 123.71784281730652
+}
