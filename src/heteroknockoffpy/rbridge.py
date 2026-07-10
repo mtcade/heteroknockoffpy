@@ -317,17 +317,27 @@ def get_knockoffs_second_order_np(
     X: np.ndarray,
     verbose: int = 0,
     verbose_prefix: str = '',
+    rng: np.random.Generator | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
         :param X: One hot encoded numpy array of X, with drop_first
         :param kwargs: Passed to r knockoff::create_second_order, likely only "shrink"
-        
+        :param rng: If given, seeds R's RNG (via set.seed()) before calling
+            create_second_order, which otherwise samples from R's ambient/global
+            RNG state -- unseeded, that state simply carries on from wherever the
+            embedded R session's previous call left it, so repeated calls with
+            identical X are not reproducible without this.
+
         :returns: Knockoffs using `rKnockoff.create_second_order`, thus with continuous categorical values.
     """
-    
+
     Xk: np.ndarray
     shrink: bool = kwargs.pop( 'shrink', True )
+    if rng is not None:
+        _seed: int = int( rng.integers( 1, 2**31 - 1 ) )
+        ro.r( 'set.seed' )( _seed )
+    #
     with (
         ro.default_converter + numpy2ri.converter
     ).context():
@@ -337,7 +347,7 @@ def get_knockoffs_second_order_np(
             **kwargs
         )
     #/with ( ro.default_converter + numpy2ri.converter )
-    
+
     return Xk
 #/def get_knockoffs_second_order_np
 

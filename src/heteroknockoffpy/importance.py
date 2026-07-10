@@ -372,6 +372,7 @@ def xgbImportances(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     importance_type: Literal[ 'weight','gain','cover','total_gain','total_cover'] = 'gain',
     verbose: int = 0,
+    rng: np.random.Generator | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -382,6 +383,8 @@ def xgbImportances(
         :param kwargs: model_kwargs (dict, forwarded to the XGBRegressor/XGBClassifier
             constructor -- e.g. max_depth, n_estimators, learning_rate, subsample,
             reg_alpha, ...), plus anything else forwarded to XGBRegressor/XGBClassifier.fit
+        :param rng: If given, seeds the XGBoost fit (random_state=rng) for
+            reproducibility. Unseeded if omitted.
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
@@ -393,6 +396,7 @@ def xgbImportances(
         outcome_type = outcome_type,
         importance_type = importance_type,
         verbose = verbose,
+        rng = rng,
         **kwargs,
     )
 #/def xgbImportances
@@ -403,6 +407,7 @@ def xgbPrismImportances(
     y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
+    rng: np.random.Generator | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -414,6 +419,8 @@ def xgbPrismImportances(
             forwarded to the XGBRegressor/XGBClassifier constructor -- e.g. max_depth,
             n_estimators, learning_rate, subsample, reg_alpha, ...), plus anything else
             forwarded to XGBRegressor/XGBClassifier.fit
+        :param rng: If given, seeds the XGBoost fit (random_state=rng) for
+            reproducibility. Unseeded if omitted.
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
@@ -424,6 +431,7 @@ def xgbPrismImportances(
         y = y,
         outcome_type = outcome_type,
         verbose = verbose,
+        rng = rng,
         **kwargs,
     )
 #/def xgbPrismImportances
@@ -434,6 +442,7 @@ def xgbShapImportances(
     y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
+    rng: np.random.Generator | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -444,6 +453,8 @@ def xgbShapImportances(
         :param kwargs: model_kwargs (dict, forwarded to the XGBRegressor/XGBClassifier
             constructor -- e.g. max_depth, n_estimators, learning_rate, subsample,
             reg_alpha, ...), plus anything else forwarded to XGBRegressor/XGBClassifier.fit
+        :param rng: If given, seeds the XGBoost fit (random_state=rng) for
+            reproducibility. Unseeded if omitted.
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
@@ -454,6 +465,7 @@ def xgbShapImportances(
         y = y,
         outcome_type = outcome_type,
         verbose = verbose,
+        rng = rng,
         **kwargs,
     )
 #/def xgbShapImportances

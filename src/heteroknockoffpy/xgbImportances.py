@@ -32,8 +32,13 @@ def _any_categorical(X_all: pl.DataFrame) -> bool:
 def _make_model(
     outcome_type: Literal['continuous','count','categorical',],
     enable_categorical: bool,
+    rng: np.random.Generator | None = None,
     **model_kwargs,
     ) -> 'xgboost.XGBRegressor | xgboost.XGBClassifier':
+    if rng is not None:
+        model_kwargs = dict( model_kwargs )
+        model_kwargs.setdefault( 'random_state', rng )
+    #
     if outcome_type == 'continuous':
         return xgboost.XGBRegressor(
             objective = 'reg:squarederror',
@@ -91,6 +96,7 @@ def _fit_model(
     outcome_type: Literal['continuous','count','categorical',] | None,
     verbose: int,
     model_kwargs: dict | None = None,
+    rng: np.random.Generator | None = None,
     **fit_kwargs,
     ) -> tuple[
         xgboost.XGBRegressor | xgboost.XGBClassifier,
@@ -114,7 +120,7 @@ def _fit_model(
     enable_categorical: bool = _any_categorical( X_all )
     X_all_pd: pd.DataFrame = X_all.to_pandas()
 
-    model = _make_model( outcomeDescriptor.outcome_type, enable_categorical, **( model_kwargs or {} ) )
+    model = _make_model( outcomeDescriptor.outcome_type, enable_categorical, rng=rng, **( model_kwargs or {} ) )
     y_fit: np.ndarray = _resolve_y_for_fit( y, outcomeDescriptor.outcome_type )
 
     if verbose > 0:
@@ -137,6 +143,7 @@ def score_importances(
     importance_type: Literal['weight','gain','cover','total_gain','total_cover',] = 'gain',
     verbose: int = 0,
     model_kwargs: dict | None = None,
+    rng: np.random.Generator | None = None,
     **fit_kwargs,
     ) -> np.ndarray:
     """
@@ -146,10 +153,13 @@ def score_importances(
 
         :param model_kwargs: Forwarded to the XGBRegressor/XGBClassifier constructor
             (e.g. max_depth, n_estimators, learning_rate, subsample, reg_alpha, ...).
+        :param rng: If given, seeds the XGBoost fit (random_state=rng) for
+            reproducibility -- xgboost's sklearn API accepts a np.random.Generator
+            directly. Unseeded (xgboost's own default) if omitted.
         :param fit_kwargs: Forwarded to XGBRegressor/XGBClassifier.fit (e.g.
             sample_weight, eval_set, early_stopping_rounds).
     """
-    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, **fit_kwargs )
+    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, rng=rng, **fit_kwargs )
 
     score_dict: dict[ str, float ] = model.get_booster().get_score( importance_type = importance_type )
 
@@ -196,6 +206,7 @@ def prism_importances(
     exponent: float = 1.0,
     verbose: int = 0,
     model_kwargs: dict | None = None,
+    rng: np.random.Generator | None = None,
     **fit_kwargs,
     ) -> np.ndarray:
     """
@@ -212,9 +223,12 @@ def prism_importances(
 
         :param model_kwargs: Forwarded to the XGBRegressor/XGBClassifier constructor
             (e.g. max_depth, n_estimators, learning_rate, subsample, reg_alpha, ...).
+        :param rng: If given, seeds the XGBoost fit (random_state=rng) for
+            reproducibility -- xgboost's sklearn API accepts a np.random.Generator
+            directly. Unseeded (xgboost's own default) if omitted.
         :param fit_kwargs: Forwarded to XGBRegressor/XGBClassifier.fit.
     """
-    model, X_all, X_all_pd, outcomeDescriptor = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, **fit_kwargs )
+    model, X_all, X_all_pd, outcomeDescriptor = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, rng=rng, **fit_kwargs )
     ot = outcomeDescriptor.outcome_type
 
     n: int = X_all_pd.shape[0]
@@ -325,6 +339,7 @@ def shap_importances(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
     model_kwargs: dict | None = None,
+    rng: np.random.Generator | None = None,
     **fit_kwargs,
     ) -> np.ndarray:
     """
@@ -334,11 +349,14 @@ def shap_importances(
 
         :param model_kwargs: Forwarded to the XGBRegressor/XGBClassifier constructor
             (e.g. max_depth, n_estimators, learning_rate, subsample, reg_alpha, ...).
+        :param rng: If given, seeds the XGBoost fit (random_state=rng) for
+            reproducibility -- xgboost's sklearn API accepts a np.random.Generator
+            directly. Unseeded (xgboost's own default) if omitted.
         :param fit_kwargs: Forwarded to XGBRegressor/XGBClassifier.fit.
     """
     import shap
 
-    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, **fit_kwargs )
+    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, rng=rng, **fit_kwargs )
 
     explainer = shap.TreeExplainer( model )
     shap_values = explainer.shap_values( X_all_pd )

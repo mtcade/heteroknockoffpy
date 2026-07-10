@@ -153,6 +153,7 @@ def get_second_order(
             X = x,
             verbose = verbose,
             verbose_prefix = verbose_prefix,
+            rng = rng,
             #*kwargs
         )
     #/def knockoffCallable
