@@ -29,18 +29,15 @@ RELEVANT_CATEGORICAL = {23, 27}
 RELEVANT = RELEVANT_NUMERIC | RELEVANT_CATEGORICAL
 CATEGORICAL_MIN_IDX = 20  # feature_idx 20-29 are the 10 categorical columns
 
-METHOD_ORDER = ["ranger_gini", "xgb_prism", "xgb_score"]
-
 TRIALS_PER_CELL = 50
 N_SWEEPS = 3
 N_POINTS = 5
-N_METHODS = 3
 
 # (sweep idn, point column, kept point values, point order)
 SWEEPS = [
     ("magnitude_sweep", "magnitude", [8.0, 16.0, 32.0, 64.0, 128.0]),
     ("rho_sweep", "rho", [0.1, 0.3, 0.5, 0.7, 0.9]),
-    ("n_sweep", "n", [500.0, 1000.0, 2000.0, 4000.0, 8000.0]),
+    ("n_sweep", "n", [256.0, 512.0, 1024.0, 2048.0, 4096.0]),
 ]
 
 
@@ -53,7 +50,7 @@ def _nu_val(df: pl.DataFrame, name: str) -> pl.DataFrame:
             pl.col("par_val_int64").cast(pl.Float64),
             pl.col("par_val_string").cast(pl.Float64, strict=False),
         )
-        if name != "idn" and name != "method" and name != "x_bundle_idn_hex"
+        if name not in ("idn", "method", "importance_type", "x_bundle_idn_hex")
         else pl.col("par_val_string")
     )
     return row.select("par_bundle_idn", val.alias(name))
@@ -86,7 +83,8 @@ def main() -> None:
 
     sweep_idn = _nu_val(trial_params.filter(pl.col("par_group") == "y"), "idn").rename({"idn": "sweep"})
     magnitude = _nu_val(trial_params.filter(pl.col("par_group") == "y"), "magnitude")
-    method = _nu_val(trial_params.filter(pl.col("par_group") == "importances"), "method")
+    method_raw = _nu_val(trial_params.filter(pl.col("par_group") == "importances"), "method")
+    importance_type = _nu_val(trial_params.filter(pl.col("par_group") == "importances"), "importance_type")
     x_hex = _nu_val(trial_params.filter(pl.col("par_group") == "_meta"), "x_bundle_idn_hex")
 
     # --- rho, n live on the X-stage bundle, reached via the _meta hex hop ---
@@ -104,15 +102,26 @@ def main() -> None:
         trial_idx_dedup.select("par_bundle_idn")
         .join(sweep_idn, on="par_bundle_idn", how="left")
         .join(magnitude, on="par_bundle_idn", how="left")
-        .join(method, on="par_bundle_idn", how="left")
+        .join(method_raw, on="par_bundle_idn", how="left")
+        .join(importance_type, on="par_bundle_idn", how="left")
         .join(x_hex.rename({"x_bundle_idn_hex": "hex_join"}), on="par_bundle_idn", how="left")
         .join(x_covariates, left_on="hex_join", right_on="x_bundle_idn_hex", how="left")
         .drop("hex_join")
+        .with_columns(
+            pl.when(pl.col("method") == "xgb_score")
+            .then(pl.col("method") + pl.lit("_") + pl.col("importance_type"))
+            .otherwise(pl.col("method"))
+            .alias("method")
+        )
     )
 
-    n_null = trial_covariates.null_count().to_dicts()[0]
+    # importance_type is only set for xgb_score bundles, so it's excluded from
+    # the null check (it's folded into `method` already and no longer needed).
+    n_null = trial_covariates.drop("importance_type").null_count().to_dicts()[0]
     p(f"trial_covariates: {trial_covariates.shape[0]} rows, null counts per column: {n_null}")
-    expected_total = N_SWEEPS * N_POINTS * TRIALS_PER_CELL * N_METHODS
+    n_methods = trial_covariates["method"].n_unique()
+    expected_total = N_SWEEPS * N_POINTS * TRIALS_PER_CELL * n_methods
+    p(f"detected {n_methods} methods: {sorted(trial_covariates['method'].unique().to_list())}")
     p(f"expected total trial-bundles (no staleness): {expected_total}")
     assert all(v == 0 for v in n_null.values()), f"unexpected nulls in trial_covariates: {n_null}"
 
@@ -137,7 +146,7 @@ def main() -> None:
     cell_counts = kept.group_by(["sweep", "point_value", "method"]).len().sort(["sweep", "point_value", "method"])
     bad_cells = cell_counts.filter(pl.col("len") != TRIALS_PER_CELL)
     p(f"cells with != {TRIALS_PER_CELL} trials: {bad_cells.to_dicts() if bad_cells.shape[0] else 'none'}")
-    p(f"cell_counts shape: {cell_counts.shape[0]} (expected {N_SWEEPS * N_POINTS * N_METHODS})")
+    p(f"cell_counts shape: {cell_counts.shape[0]} (expected {N_SWEEPS * N_POINTS * n_methods})")
 
     # --- importances/selections sanity ---
     for name, df in [("importances", importances), ("selections", selections)]:
@@ -192,6 +201,8 @@ def main() -> None:
         f1_mean=pl.col("f1").mean(), f1_std=pl.col("f1").std(),
     )
 
+    method_order = sorted(trial_covariates["method"].unique().to_list())
+
     def emit_table_html(sweep_idn: str, points: list[float], point_label: str) -> str:
         lines = [
             "<table>",
@@ -201,9 +212,9 @@ def main() -> None:
         for point in points:
             cell = agg.filter((pl.col("sweep") == sweep_idn) & (pl.col("point_value") == point))
             cell_by_method = {r["method"]: r for r in cell.to_dicts()}
-            for i, meth in enumerate(METHOD_ORDER):
+            for i, meth in enumerate(method_order):
                 r = cell_by_method[meth]
-                td_point = f'<td rowspan="3">{point:g}</td>' if i == 0 else ""
+                td_point = f'<td rowspan="{n_methods}">{point:g}</td>' if i == 0 else ""
                 lines.append(
                     f"<tr>{td_point}<td>{meth}</td>"
                     f'<td>{r["power_mean"]:.3f} ± {r["power_std"]:.3f}</td>'
