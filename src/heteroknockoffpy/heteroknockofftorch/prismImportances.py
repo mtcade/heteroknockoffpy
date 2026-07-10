@@ -233,16 +233,51 @@ def _prism_setup(
 
     assert all( X.schema[col] == Xk.schema[col] for col in X.columns )
 
-    X_all: pl.DataFrame = pl.concat(
-        (
-            X,
-            Xk.rename({ col: col + '~' for col in Xk.columns }),
-        ),
-        how = 'horizontal',
+    # -- OHE-encode X and Xk independently (not a single concatenated frame), so
+    #    X_all_np/groups/oheDict lay out as [X's own columns, Xk's own columns] --
+    #    the contract assumed by wFromImportances, calculatorOps.py's torch_prism_gw
+    #    row-building, and _PRISMNetworkPairwise/_PRISMNetworkAdditive's
+    #    `p = input_size // 2` split. Encoding a single concatenated frame instead
+    #    groups columns by numeric-vs-categorical across X and Xk jointly (per
+    #    get_ohe_df/get_oheDict's canonical "non-categorical first, then categorical"
+    #    order), which only coincides with an X/Xk split when a dataset has no
+    #    categorical columns.
+    categorical_columns: tuple[ str, ... ] = tuple(
+        col for col, dtype in X.schema.items() if dtype == pl.Categorical
     )
+    categories_override: dict[ str, list[ str ] ] | None = None
+    if categorical_columns:
+        # Union of categories present in either X or Xk, so both sides encode to
+        # the same dummy-column count even if a category is missing from one side's
+        # realized sample.
+        categories_override = {
+            col: sorted(
+                pl.concat( ( X[ col ], Xk[ col ] ), how = 'vertical' )
+                .cast( pl.Utf8 ).unique().drop_nulls().to_list()
+            )
+            for col in categorical_columns
+        }
+    #
 
-    X_all_np: np.ndarray = utilities.get_ohe_np( X = X_all, drop_first = drop_first )
-    oheDict: dict[ str, int | tuple[ int,... ] ] = utilities.get_oheDict( X = X_all, drop_first = drop_first )
+    X_np: np.ndarray = utilities.get_ohe_np(
+        X = X, drop_first = drop_first, categories_override = categories_override,
+    )
+    Xk_np: np.ndarray = utilities.get_ohe_np(
+        X = Xk, drop_first = drop_first, categories_override = categories_override,
+    )
+    X_all_np: np.ndarray = np.concatenate( ( X_np, Xk_np ), axis = 1 )
+
+    X_oheDict: dict[ str, int | tuple[ int,... ] ] = utilities.get_oheDict(
+        X = X, drop_first = drop_first, categories_override = categories_override,
+    )
+    p_ohe_x: int = X_np.shape[1]
+    oheDict: dict[ str, int | tuple[ int,... ] ] = dict( X_oheDict )
+    for col, idx in X_oheDict.items():
+        oheDict[ col + '~' ] = (
+            idx + p_ohe_x if isinstance( idx, int )
+            else tuple( i + p_ohe_x for i in idx )
+        )
+    #
 
     groups: list[ list[int] ] = [
         [oheDict[col]] if isinstance( oheDict[col], int ) else list( oheDict[col] )

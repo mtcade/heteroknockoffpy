@@ -8,6 +8,7 @@ import pytest
 
 from heteroknockoffpy import importance
 from heteroknockoffpy.heteroknockofftorch.torchImportances import PRISMPredictionModel
+from heteroknockoffpy.heteroknockofftorch.prismImportances import _prism_setup
 
 
 def _make_synthetic(n: int = 200, p: int = 10, seed: int = 0):
@@ -867,3 +868,73 @@ def test_prism_gw_snapshot_count_matches_lambda_stages():
     )
     assert g_imp.shape == (10,)
     assert w_imp.shape == (10,)
+
+
+# ---------------------------------------------------------------------------
+# _prism_setup layout — X-then-Xk contiguous blocks (regression: previously
+# oheDict/groups were grouped numeric-then-categorical across the whole
+# concatenated [X, Xk] frame -- get_oheDict's documented canonical order for a
+# single encoded frame -- which only coincides with an X-then-Xk split when a
+# dataset has no categorical columns. wFromImportances, calculatorOps.py's
+# torch_prism_gw row-builder, and _PRISMNetworkPairwise/_PRISMNetworkAdditive's
+# `p = input_size // 2` split all assume the latter. Shape/non-negativity
+# checks (used everywhere else in this file) can't catch an ordering bug, since
+# they're identical regardless of internal group order -- these tests assert
+# on identity/order instead.
+# ---------------------------------------------------------------------------
+
+def _assert_prism_setup_x_then_xk_layout(X: pl.DataFrame, Xk: pl.DataFrame, y: pl.Series) -> None:
+    p = X.shape[1]
+    X_all_np, y_np, groups, oheDict, loss_func, out_dim, desc = _prism_setup(
+        X=X, Xk=Xk, y=y, layers=[8], outcome_type=None, drop_first=True,
+    )
+    assert len(groups) == 2 * p
+
+    x_cols = list(X.columns)
+    keys = list(oheDict.keys())
+    assert keys[:p] == x_cols, f"expected X's own columns first, got {keys[:p]}"
+    assert keys[p:] == [c + '~' for c in x_cols], f"expected Xk's columns second, got {keys[p:]}"
+
+    # group i (X feature) and group i+p (its Xk copy) must reference the SAME
+    # relative OHE offset, just shifted by the per-side OHE width -- i.e. they
+    # really are the same original feature's X and Xk copy, not unrelated columns.
+    p_ohe_x = X_all_np.shape[1] // 2
+    for i in range(p):
+        g_x = groups[i]
+        g_xk = groups[i + p]
+        shifted = [idx - p_ohe_x for idx in g_xk]
+        assert shifted == g_x, (
+            f"feature {x_cols[i]}: X group {g_x} vs Xk group {g_xk} shifted {shifted} "
+            f"(expected Xk group == X group shifted by {p_ohe_x})"
+        )
+
+
+def test_prism_setup_layout_numeric_only():
+    """Sanity baseline: purely numeric data, where old and new code agree."""
+    X, Xk, y = _make_synthetic(n=50, p=6, seed=1)
+    _assert_prism_setup_x_then_xk_layout(X, Xk, y)
+
+
+def test_prism_setup_layout_mixed_numeric_categorical():
+    """
+    Regression test for the X/Xk OHE layout bug. Before the fix, with
+    p_numeric=4 and cat_cols=[3, 3] (p=6), _prism_setup's oheDict grouped ALL
+    non-categorical columns (X's 4 numeric AND Xk's 4 numeric) before any
+    categorical columns, so oheDict.keys()[:p] was
+    [xn0,xn1,xn2,xn3,xn0~,xn1~] -- NOT X's own columns
+    [xn0,xn1,xn2,xn3,xc0,xc1].
+    """
+    X, Xk, p = _make_mixed_X(n=100, p_numeric=4, cat_cols=[3, 3], seed=42)
+    y = pl.Series("y", np.random.default_rng(42).standard_normal(100))
+    _assert_prism_setup_x_then_xk_layout(X, Xk, y)
+
+
+def test_prism_setup_layout_matches_synth_sweep_shape():
+    """
+    Same p_numeric/p_categorical shape as the silverknockoff synth_sweep_3
+    bundle that originally surfaced this bug (p_numeric=20, 10 categorical
+    variables with 4 categories each).
+    """
+    X, Xk, p = _make_mixed_X(n=64, p_numeric=20, cat_cols=[4] * 10, seed=99)
+    y = pl.Series("y", np.random.default_rng(99).standard_normal(64))
+    _assert_prism_setup_x_then_xk_layout(X, Xk, y)
