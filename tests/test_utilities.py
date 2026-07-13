@@ -19,6 +19,7 @@ import polars as pl
 import pytest
 
 from heteroknockoffpy.utilities import (
+    OutcomeDescriptor,
     collapse_ohe,
     get_ar1_simple_case,
     get_ohe_df,
@@ -578,3 +579,48 @@ class TestGetAr1SimpleCase:
         assert len(case.X) == 60
         assert len(case.Xk) == 60
         assert case.X.schema == case.Xk.schema
+
+
+# ── OutcomeDescriptor.infer: pl.Enum categorical y ─────────────────────────────
+#
+# SynthesizeY (silverknockoff) builds categorical y as pl.Enum rather than
+# pl.Categorical, specifically to avoid the global-string-cache pollution
+# documented in this file's header note (an Enum's category set is pinned
+# exactly, unlike Categorical's, which silently absorbs unrelated categories
+# already registered elsewhere in the process). infer() originally checked
+# dtype equality against pl.Categorical, which does not hold for pl.Enum --
+# these tests would have failed with `TypeError: Unrecognized y.dtype=...`
+# before infer() was widened to `isinstance(dtype, (pl.Categorical, pl.Enum))`.
+
+class TestOutcomeDescriptorInfer:
+
+    def test_infer_series_categorical_dtype_is_categorical(self):
+        y = pl.Series("y", ["0", "1", "2", "1"], dtype=pl.Utf8).cast(pl.Categorical)
+        descriptor = OutcomeDescriptor.infer(y=y, outcome_type=None)
+        assert descriptor.outcome_type == "categorical"
+        assert descriptor.outcome_dimension == "single"
+
+    def test_infer_series_enum_dtype_is_categorical(self):
+        y = pl.Series("y", ["0", "1", "2", "1"], dtype=pl.Enum(["0", "1", "2"]))
+        descriptor = OutcomeDescriptor.infer(y=y, outcome_type=None)
+        assert descriptor.outcome_type == "categorical"
+        assert descriptor.outcome_dimension == "single"
+
+    def test_infer_dataframe_enum_dtype_is_categorical(self):
+        y = pl.DataFrame({"y": pl.Series(["0", "1", "2", "1"], dtype=pl.Enum(["0", "1", "2"]))})
+        descriptor = OutcomeDescriptor.infer(y=y, outcome_type=None)
+        assert descriptor.outcome_type == "categorical"
+        assert descriptor.outcome_dimension == "single"
+
+    def test_infer_enum_not_inflated_by_unrelated_categorical_pollution(self):
+        # Register an unrelated 4-category vocabulary in the (process-wide)
+        # global string cache first, mimicking X's own categorical columns
+        # (e.g. categories_per_var=4) being cast before y.
+        _ = pl.Series("x", ["0", "1", "2", "3"], dtype=pl.Utf8).cast(pl.Categorical)
+
+        y = pl.Series("y", ["0", "1", "2", "1"], dtype=pl.Enum(["0", "1", "2"]))
+        assert len(y.cat.get_categories()) == 3
+
+        descriptor = OutcomeDescriptor.infer(y=y, outcome_type=None)
+        assert descriptor.outcome_type == "categorical"
+        assert descriptor.outcome_dimension == "single"

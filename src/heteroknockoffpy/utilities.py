@@ -56,7 +56,7 @@ class OutcomeDescriptor:
                         outcome_type = 'count',
                     )
                 #
-                elif y.dtype == pl.Categorical:
+                elif isinstance( y.dtype, ( pl.Categorical, pl.Enum ) ):
                     return cls(
                         outcome_dimension = 'single',
                         outcome_type = 'categorical',
@@ -92,7 +92,7 @@ class OutcomeDescriptor:
                         outcome_type = 'count',
                     )
                 #
-                elif dtype == pl.Categorical:
+                elif isinstance( dtype, ( pl.Categorical, pl.Enum ) ):
                     return cls.infer(
                         y = y,
                         outcome_type = 'categorical',
