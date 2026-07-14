@@ -29,6 +29,23 @@ def _localGrad_forNumeric_t(
 #/def _localGrad_forNumeric_t
 
 
+def _ridge_inv_cov_t( cov: torch.Tensor ) -> torch.Tensor:
+    """Inverse of a Mahalanobis covariance, ridge-regularized relative to its own
+    scale so a momentarily-degenerate (near-)constant logit-contrast doesn't produce
+    an exactly-singular matrix or blow up the inverse. Trace-relative rather than a
+    fixed absolute epsilon since `cov` is built from raw model logits (unlike e.g.
+    the standardized-input eps=1e-8 floors elsewhere in this module).
+    """
+    if cov.ndim == 0:
+        eps = max( 1e-6 * abs( cov.item() ), 1e-12 )
+        return torch.tensor( [[ 1.0 / ( cov.item() + eps ) ]], device=cov.device, dtype=cov.dtype )
+    #
+    k = cov.shape[0]
+    eps = max( ( 1e-6 * torch.trace( cov ) / k ).item(), 1e-12 )
+    return torch.linalg.inv( cov + eps * torch.eye( k, device=cov.device, dtype=cov.dtype ) )
+#/def _ridge_inv_cov_t
+
+
 def _localGrad_forCategories_t(
     j: list[ int ],
     X_t: torch.Tensor,
@@ -105,6 +122,7 @@ def _prismImportances_t(
     drop_first: bool = True,
     inv_cov_t: torch.Tensor | None = None,
     cat_ohe_vals: dict[ int, tuple[ float, float ] ] | None = None,
+    bandwidth_exponent: float = 0.2,
     ) -> torch.Tensor:
     """
     Tensor-native PRISM importance computation. Returns shape (p_out,) tensor.
@@ -117,7 +135,7 @@ def _prismImportances_t(
         auto_diff_full_t: torch.Tensor = model.auto_diff_t( X_all_t )  # (n, p_ohe)
     elif local_grad_method == 'bandwidth':
         if bandwidth is None:
-            bandwidth = float( n ** -0.2 )
+            bandwidth = float( n ** -bandwidth_exponent )
     else:
         raise ValueError( "Unrecognized local_grad_method='{}'".format( local_grad_method ) )
     #
@@ -534,6 +552,7 @@ def prismGImportances(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
+    bandwidth_exponent: float = 0.2,
     ) -> np.ndarray:
     """
     PRISM-G importances: average of PRISM local-gradient snapshots over a lambda path.
@@ -550,6 +569,8 @@ def prismGImportances(
     :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
     :param bandwidth: Bandwidth for finite-difference approximation (auto-set if None).
     :param exponent: Power applied to each local gradient value before averaging.
+    :param bandwidth_exponent: Exponent used for the auto-set bandwidth (n ** -bandwidth_exponent)
+        when bandwidth is None. Ignored if bandwidth is given explicitly.
     :returns: Array of shape (2*p,).
     """
     from . import torchImportances
@@ -597,11 +618,7 @@ def prismGImportances(
                 _logits = model.predict_t( X_t )
             logit_contrasts = _logits[:, 1:] - _logits[:, 0:1]
             _cov = torch.cov( logit_contrasts.T )
-            if _cov.ndim == 0:
-                inv_cov_t = torch.tensor( [[ 1.0 / _cov.item() ]], device=X_t.device, dtype=torch.float32 )
-            else:
-                inv_cov_t = torch.linalg.inv( _cov )
-            #
+            inv_cov_t = _ridge_inv_cov_t( _cov )
             if local_grad_method == 'auto_diff':
                 return _prismImportances_categorical_t(
                     model = model,
@@ -623,6 +640,7 @@ def prismGImportances(
                     drop_first = drop_first,
                     inv_cov_t = inv_cov_t,
                     cat_ohe_vals = cat_ohe_vals,
+                    bandwidth_exponent = bandwidth_exponent,
                 ).cpu().numpy()
             #
         #/def snapshot_fn
@@ -637,6 +655,7 @@ def prismGImportances(
                 exponent = exponent,
                 drop_first = drop_first,
                 cat_ohe_vals = cat_ohe_vals,
+                bandwidth_exponent = bandwidth_exponent,
             ).cpu().numpy()
         #/def snapshot_fn
     #
@@ -677,6 +696,7 @@ def prismGWImportances(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
+    bandwidth_exponent: float = 0.2,
     ) -> tuple[ np.ndarray, np.ndarray ]:
     """
     PRISM-G and PRISM-W importances from a single training pass.
@@ -687,6 +707,8 @@ def prismGWImportances(
 
     :param model_type: see torchImportances.PRISMPredictionModel docstring for the full
         list ('mlp', 'pairwise', 'additive').
+    :param bandwidth_exponent: Exponent used for the auto-set bandwidth (n ** -bandwidth_exponent)
+        when bandwidth is None. Ignored if bandwidth is given explicitly.
     :returns: (g_importances, w_importances) both of shape (2*p,).
     """
     from . import torchImportances
@@ -741,11 +763,7 @@ def prismGWImportances(
                 _logits = model.predict_t( X_t )
             logit_contrasts = _logits[:, 1:] - _logits[:, 0:1]
             _cov = torch.cov( logit_contrasts.T )
-            if _cov.ndim == 0:
-                inv_cov_t = torch.tensor( [[ 1.0 / _cov.item() ]], device=X_t.device, dtype=torch.float32 )
-            else:
-                inv_cov_t = torch.linalg.inv( _cov )
-            #
+            inv_cov_t = _ridge_inv_cov_t( _cov )
             if local_grad_method == 'auto_diff':
                 return _prismImportances_categorical_t(
                     model = model,
@@ -767,6 +785,7 @@ def prismGWImportances(
                     drop_first = drop_first,
                     inv_cov_t = inv_cov_t,
                     cat_ohe_vals = cat_ohe_vals,
+                    bandwidth_exponent = bandwidth_exponent,
                 ).cpu().numpy()
             #
         #/def snapshot_fn
@@ -782,6 +801,7 @@ def prismGWImportances(
                 exponent = exponent,
                 drop_first = drop_first,
                 cat_ohe_vals = cat_ohe_vals,
+                bandwidth_exponent = bandwidth_exponent,
             ).cpu().numpy()
         #/def snapshot_fn
     #

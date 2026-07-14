@@ -158,6 +158,7 @@ def prismGImportances(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
+    bandwidth_exponent: float = 0.2,
     ) -> np.ndarray:
     """
     PRISM-G importances: average of PRISM local-gradient snapshots over a lambda path.
@@ -173,6 +174,8 @@ def prismGImportances(
     :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
     :param bandwidth: Bandwidth for finite-difference approximation (auto-set if None).
     :param exponent: Power applied to each local gradient value before averaging.
+    :param bandwidth_exponent: Exponent used for the auto-set bandwidth (n ** -bandwidth_exponent)
+        when bandwidth is None. Ignored if bandwidth is given explicitly.
     :returns: Array of shape (2*p,).
     """
     from . import _processIsolation
@@ -198,6 +201,7 @@ def prismGImportances(
         drop_first = drop_first,
         dense_activation = dense_activation,
         verbose = verbose,
+        bandwidth_exponent = bandwidth_exponent,
     )
 #/def prismGImportances
 
@@ -224,6 +228,7 @@ def prismGWImportances(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
+    bandwidth_exponent: float = 0.2,
     ) -> tuple[ np.ndarray, np.ndarray ]:
     """
     PRISM-G and PRISM-W importances from a single training pass.
@@ -234,6 +239,8 @@ def prismGWImportances(
 
     :param model_type: see heteroknockofftorch.torchImportances.PRISMPredictionModel docstring
         for the full list ('mlp', 'pairwise', 'additive').
+    :param bandwidth_exponent: Exponent used for the auto-set bandwidth (n ** -bandwidth_exponent)
+        when bandwidth is None. Ignored if bandwidth is given explicitly.
     :returns: (g_importances, w_importances) both of shape (2*p,).
     """
     from . import _processIsolation
@@ -259,6 +266,7 @@ def prismGWImportances(
         drop_first = drop_first,
         dense_activation = dense_activation,
         verbose = verbose,
+        bandwidth_exponent = bandwidth_exponent,
     )
 #/def prismGWImportances
 
