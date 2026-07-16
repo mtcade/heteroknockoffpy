@@ -22,41 +22,26 @@
     Native categorical-feature support (enable_categorical/tree_method):
       https://xgboost.readthedocs.io/en/latest/tutorials/categorical.html
 
-    The most relevant kwargs -- these are the exact set silverknockoff tunes
-    and forwards as `model_kwargs` for its xgb_score/xgb_prism/xgb_shap
-    importance methods (see
-    silverknockoff/src/silverknockoff/cellOps/calculatorOps.py:
-    _xgb_model_kwargs_from_params), and the ones actually trained in the
-    synth_sweep_categorical_3 / synth_sweep_count_3 bundles:
+    The most relevant kwargs (forwarded as `model_kwargs`/plain kwargs to the
+    XGBRegressor/XGBClassifier constructor, mirroring xgbImportances.py's
+    convention):
       - max_depth (int): Maximum tree depth per boosting round. Deeper trees
-        fit more complex interactions but overfit faster. Tuned to 7
-        (xgb_score/xgb_shap) and 10 (xgb_prism) in the _3 sweep bundles.
+        fit more complex interactions but overfit faster.
       - learning_rate (float, xgb's "eta"): Step-size shrinkage applied to
-        each boosting round's leaf weights. Tuned to ~0.019 (xgb_score/
-        xgb_shap) and ~0.0065 (xgb_prism) -- small values paired with a large
-        n_estimators.
+        each boosting round's leaf weights.
       - min_child_weight (float): Minimum sum of instance Hessian weight
         needed in a child to keep splitting; larger values make the trees
-        more conservative. Tuned to ~0.03-0.09 in the _3 bundles (very low,
-        i.e. splits are barely restricted by this).
-      - subsample (float): Fraction of training rows subsampled per boosting
-        round. Tuned to 0.58-0.67 in the _3 bundles.
+        more conservative.
+      - subsample (float): Fraction of training rows subsampled per boosting round.
       - colsample_bytree (float): Fraction of columns subsampled when
-        constructing each tree. Tuned to 0.96-0.97 in the _3 bundles (almost
-        no column subsampling).
-      - reg_alpha (float): L1 regularization on leaf weights. Tuned to ~1.1
-        (xgb_score/xgb_shap) and ~9.7 (xgb_prism, much stronger L1).
-      - reg_lambda (float): L2 regularization on leaf weights. Tuned to
-        ~0.017 (xgb_score/xgb_shap) and ~0.0002 (xgb_prism, almost none).
+        constructing each tree.
+      - reg_alpha (float): L1 regularization on leaf weights.
+      - reg_lambda (float): L2 regularization on leaf weights.
       - gamma (float): Minimum loss reduction required to make a further
-        split (larger = more conservative). Tuned to ~3.3 (xgb_score/
-        xgb_shap) and ~0.09 (xgb_prism).
-      - n_estimators (int): Number of boosting rounds. Tuned to 1000
-        (xgb_score/xgb_shap, paired with the small learning_rate above) and
-        55 (xgb_prism).
+        split (larger = more conservative).
+      - n_estimators (int): Number of boosting rounds.
     All of the above are omitted from the constructor call when not passed in
-    kwargs, so xgboost's own defaults apply -- same convention as
-    xgbImportances.py and silverknockoff's _xgb_model_kwargs_from_params.
+    kwargs, so xgboost's own defaults apply.
 """
 
 from .utilities import DataFrameLike, _resolve_df, choices_from_weights
@@ -77,8 +62,7 @@ def _make_regressor(
         :param model_kwargs: Forwarded to xgboost.XGBRegressor -- most
             relevantly max_depth, learning_rate, min_child_weight, subsample,
             colsample_bytree, reg_alpha, reg_lambda, gamma, n_estimators. See
-            module docstring for the tuned values used by silverknockoff's
-            xgb_score/xgb_prism/xgb_shap importance methods, and
+            the module docstring for what each controls, and
             https://xgboost.readthedocs.io/en/latest/python/python_api.html
             for the full parameter reference.
     """
@@ -101,8 +85,7 @@ def _make_classifier(
     ) -> xgboost.XGBClassifier:
     """
         :param model_kwargs: Forwarded to xgboost.XGBClassifier -- see
-            `_make_regressor` and the module docstring for the relevant kwargs
-            and their tuned values.
+            `_make_regressor` and the module docstring for the relevant kwargs.
     """
     if rng is not None:
         model_kwargs = dict( model_kwargs )
@@ -203,7 +186,7 @@ def get_forest_conditional_expectations(
         :param kwargs: Forwarded to xgboost.XGBRegressor -- see the module
             docstring for the relevant kwargs (max_depth, learning_rate,
             min_child_weight, subsample, colsample_bytree, reg_alpha,
-            reg_lambda, gamma, n_estimators) and their tuned values, and
+            reg_lambda, gamma, n_estimators), and
             https://xgboost.readthedocs.io/en/latest/python/python_api.html
             for the full reference.
         :returns: DataFrame with non-categorical columns of X replaced by
@@ -250,7 +233,7 @@ def get_knockoffs_with_Xk_numeric(
         :param kwargs: Forwarded to xgboost.XGBClassifier -- see the module
             docstring for the relevant kwargs (max_depth, learning_rate,
             min_child_weight, subsample, colsample_bytree, reg_alpha,
-            reg_lambda, gamma, n_estimators) and their tuned values.
+            reg_lambda, gamma, n_estimators).
     """
     X = _resolve_df( X )
 
@@ -313,7 +296,7 @@ def get_knockoffs_SCIP(
             xgboost.XGBClassifier (categorical columns) -- see the module
             docstring for the relevant kwargs (max_depth, learning_rate,
             min_child_weight, subsample, colsample_bytree, reg_alpha,
-            reg_lambda, gamma, n_estimators) and their tuned values, and
+            reg_lambda, gamma, n_estimators), and
             https://xgboost.readthedocs.io/en/latest/python/python_api.html
             for the full reference.
     """

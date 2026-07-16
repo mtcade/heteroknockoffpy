@@ -39,42 +39,30 @@ def prismWImportances(
     At the end of each lambda stage the group norms ||w[:, group_j]||_F are recorded;
     the final importances are the mean over all snapshots.
 
-    Tuned in practice via silverknockoff's `torch_prism_gw` importance method
-    (`_3` sweep bundles; `torch_prism_g`/`torch_prism_w` share the same
-    hyperparameter set when used standalone) -- see the shared parameter notes
-    below for common values; this function's own defaults (`epochs=500`,
-    `learning_rate=0.01`, etc.) are rarely used as-is once tuned.
-
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.
     :param y: Outcome; scalar (continuous/count) or categorical Series/DataFrame.
-    :param layers: Hidden-layer widths for the MLP. In practice built as
-        `[round(p * first_layer_ratio)]` then `layer_count - 1` more entries each
-        `round(prev * layer_ratio)`, where `p` is the OHE-expanded width of [X, Xk]
-        combined; tuned `first_layer_ratio` seen: 1.7-3.67, `layer_count=1` in both
-        `_3` bundles (so `layer_ratio`, tuned 0.34-0.36, currently has no effect
-        since no second layer is built).
+    :param layers: Hidden-layer widths for the MLP. A common construction is
+        `[round(p * first_layer_ratio)]` then further entries each
+        `round(prev * layer_ratio)`, where `p` is the OHE-expanded width of
+        [X, Xk] combined, though any explicit sequence of widths works.
     :param model_type: see heteroknockofftorch.torchImportances.PRISMPredictionModel docstring
-        for the full list ('mlp', 'pairwise', 'additive'). Tuned value: `'mlp'`.
+        for the full list ('mlp', 'pairwise', 'additive'). Default `'pairwise'`.
     :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
-    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50)
-        if omitted; in practice a caller-supplied, roughly log-spaced decreasing
-        sequence of ~24 values (not literal constants worth hardcoding here).
-    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values;
-        in practice a caller-supplied sequence the same length as `lambda_path`.
-    :param batch_size: Minibatch size; `None` (the tuned value) uses full-batch training.
-    :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
-        Computed in practice as `per_stage_epochs * len(lambda_path)`; tuned total seen: 530-550.
+    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50) if omitted.
+    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
+    :param batch_size: Minibatch size; `None` (the default) uses full-batch training.
+    :param epochs: Total training epochs, distributed as evenly as possible
+        across lambda stages. Default `500`.
     :param n_warmup: Epochs of warmup training before entering the lambda-path
-        schedule. Tuned value seen: 54-100 (vs. the default of `0`).
+        schedule. Default `0`.
     :param vertical_prefit: Whether to prefit a smaller model and transfer its
         weights vertically into the full model before the lambda-path loop.
     :param prefit_noise_std: Std of noise added when duplicating prefit weights
         into the larger model (only relevant if `vertical_prefit=True`).
     :param reset_optimizer: Whether to reset the Adam optimizer state at each
         lambda-path stage transition.
-    :param learning_rate: Adam learning rate. Tuned value seen: 0.0037-0.01
-        (vs. the default of `0.01`).
+    :param learning_rate: Adam learning rate. Default `0.01`.
     :param drop_first: Whether categorical columns are OHE'd with the first
         category dropped (standard identifiability convention).
     :param dense_activation: Activation function name for the MLP's hidden layers.
@@ -138,11 +126,9 @@ def prismWImportancesPerOHE(
     Only 'mlp' and 'pairwise' are supported: 'additive' does not extend naturally to
     a per-dummy treatment.
 
-    See `prismWImportances`'s docstring for the shared parameter meanings and
-    the tuned common-value set (silverknockoff's `torch_prism_gw` importance
-    method): `layers`/`first_layer_ratio` derivation, `learning_rate` (0.0037-0.01),
-    `n_warmup` (54-100), `epochs` (530-550), `lambda_path`/`a_path` (~24-entry
-    caller-supplied sequences) -- all apply identically here.
+    See `prismWImportances`'s docstring for the shared parameter meanings
+    (`layers` construction, `lambda_path`/`a_path`, etc.) -- all apply
+    identically here.
 
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.
@@ -225,11 +211,9 @@ def prismGImportances(
     Same training procedure as prismWImportances; at the end of each lambda stage the
     PRISM importances (auto_diff or bandwidth) of the current model are recorded.
 
-    Shares `prismWImportances`'s training-loop parameters and tuned common
-    values (`layers`/`first_layer_ratio`, `learning_rate` 0.0037-0.01, `n_warmup`
-    54-100, `epochs` 530-550, `lambda_path`/`a_path` ~24-entry sequences) --
-    see that docstring for details. `local_grad_method`/`bandwidth`/`exponent`/
-    `bandwidth_exponent` below are specific to the PRISM-G local-gradient step.
+    Shares `prismWImportances`'s training-loop parameters -- see that docstring
+    for details. `local_grad_method`/`bandwidth`/`exponent`/`bandwidth_exponent`
+    below are specific to the PRISM-G local-gradient step.
 
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.
@@ -237,18 +221,17 @@ def prismGImportances(
     :param layers: Hidden-layer widths for the MLP; see `prismWImportances`.
     :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
     :param model_type: see heteroknockofftorch.torchImportances.PRISMPredictionModel docstring
-        for the full list ('mlp', 'pairwise', 'additive'). Tuned value: `'mlp'`.
-    :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite difference).
-        Tuned value: `'auto_diff'`.
+        for the full list ('mlp', 'pairwise', 'additive'). Default `'pairwise'`.
+    :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite
+        difference). Default `'auto_diff'`.
     :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
     :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
     :param batch_size: Minibatch size; `None` uses full-batch training.
     :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
     :param bandwidth: Bandwidth for finite-difference approximation (auto-set if
-        None). Only relevant when `local_grad_method='bandwidth'`; unused by the
-        tuned `'auto_diff'` configuration.
-    :param exponent: Power applied to each local gradient value before averaging.
-        Left at the default (`1.0`) in the tuned `_3` bundles.
+        None). Only relevant when `local_grad_method='bandwidth'`.
+    :param exponent: Power applied to each local gradient value before
+        averaging. Default `1.0`.
     :param n_warmup: Epochs of warmup training before entering the lambda-path schedule.
     :param vertical_prefit: Whether to prefit a smaller model and transfer its
         weights vertically into the full model before the lambda-path loop.
@@ -262,8 +245,7 @@ def prismGImportances(
     :param dense_activation: Activation function name for the MLP's hidden layers.
     :param verbose: Verbosity level (0 = silent).
     :param bandwidth_exponent: Exponent used for the auto-set bandwidth (n ** -bandwidth_exponent)
-        when bandwidth is None. Ignored if bandwidth is given explicitly. Left at
-        the default (`0.2`) in the tuned `_3` bundles.
+        when bandwidth is None. Ignored if bandwidth is given explicitly. Default `0.2`.
     :returns: Array of shape (2*p,).
     """
     from . import _processIsolation
@@ -325,54 +307,41 @@ def prismGWImportances(
     At each lambda stage the snapshot_fn records PRISM-W group norms as a side
     effect while returning PRISM-G local-gradient importances as the primary snapshot.
 
-    This is the method silverknockoff actually tunes/uses (`torch_prism_gw`
-    importance method, `_3` sweep bundles) -- the common values below are
-    pulled directly from those bundles' `settings/parameters_0.json`.
-
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.
     :param y: Outcome; scalar (continuous/count) or categorical Series/DataFrame.
-    :param layers: Hidden-layer widths for the MLP. Built in practice as
-        `[round(p * first_layer_ratio)]` then `layer_count - 1` more entries each
-        `round(prev * layer_ratio)`; tuned `first_layer_ratio` seen: 1.7-3.67,
-        `layer_count=1` in both `_3` bundles (so `layer_ratio`, tuned 0.34-0.36,
-        currently has no effect since no second layer is built).
+    :param layers: Hidden-layer widths for the MLP. A common construction is
+        `[round(p * first_layer_ratio)]` then further entries each
+        `round(prev * layer_ratio)`, though any explicit sequence of widths works.
     :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
     :param model_type: see heteroknockofftorch.torchImportances.PRISMPredictionModel docstring
-        for the full list ('mlp', 'pairwise', 'additive'). Tuned value: `'mlp'`.
+        for the full list ('mlp', 'pairwise', 'additive'). Default `'pairwise'`.
     :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite
-        difference). Tuned value: `'auto_diff'`.
-    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50)
-        if omitted; in practice a caller-supplied, roughly log-spaced decreasing
-        sequence of ~24 values.
-    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path
-        values; in practice a caller-supplied sequence the same length as `lambda_path`.
-    :param batch_size: Minibatch size; `None` (the tuned value) uses full-batch training.
+        difference). Default `'auto_diff'`.
+    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50) if omitted.
+    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
+    :param batch_size: Minibatch size; `None` (the default) uses full-batch training.
     :param epochs: Total training epochs, distributed as evenly as possible
-        across lambda stages. Computed in practice as `per_stage_epochs *
-        len(lambda_path)`; tuned total seen: 530-550.
+        across lambda stages. Default `500`.
     :param bandwidth: Bandwidth for finite-difference approximation (auto-set if
-        None). Only relevant when `local_grad_method='bandwidth'`; unused by the
-        tuned `'auto_diff'` configuration.
+        None). Only relevant when `local_grad_method='bandwidth'`.
     :param exponent: Power applied to each local gradient value before
-        averaging. Left at the default (`1.0`) in the tuned `_3` bundles.
+        averaging. Default `1.0`.
     :param n_warmup: Epochs of warmup training before entering the lambda-path
-        schedule. Tuned value seen: 54-100 (vs. the default of `0`).
+        schedule. Default `0`.
     :param vertical_prefit: Whether to prefit a smaller model and transfer its
         weights vertically into the full model before the lambda-path loop.
     :param prefit_noise_std: Std of noise added when duplicating prefit weights
         into the larger model (only relevant if `vertical_prefit=True`).
     :param reset_optimizer: Whether to reset the Adam optimizer state at each
         lambda-path stage transition.
-    :param learning_rate: Adam learning rate. Tuned value seen: 0.0037-0.01
-        (vs. the default of `0.01`).
+    :param learning_rate: Adam learning rate. Default `0.01`.
     :param drop_first: Whether categorical columns are OHE'd with the first
         category dropped (standard identifiability convention).
     :param dense_activation: Activation function name for the MLP's hidden layers.
     :param verbose: Verbosity level (0 = silent).
     :param bandwidth_exponent: Exponent used for the auto-set bandwidth (n ** -bandwidth_exponent)
-        when bandwidth is None. Ignored if bandwidth is given explicitly. Left at
-        the default (`0.2`) in the tuned `_3` bundles.
+        when bandwidth is None. Ignored if bandwidth is given explicitly. Default `0.2`.
     :returns: (g_importances, w_importances) both of shape (2*p,).
     """
     from . import _processIsolation
@@ -435,14 +404,10 @@ def prismGLocalGradients(
     Categorical columns (c-1 per variable): model-prediction contrast vs. category 0
       (drop_first=True convention — category 0 is the implicit reference).
 
-    Shares `prismGImportances`'s training-loop parameters and tuned common
-    values (`layers`/`first_layer_ratio`, `learning_rate` 0.0037-0.01, `n_warmup`
-    54-100, `epochs` 530-550, `lambda_path`/`a_path` ~24-entry sequences,
-    `local_grad_method`/`bandwidth` finite-difference vs. exact) -- see that
-    docstring for the full common-value list; this function differs only in
-    defaulting `local_grad_method` to `'bandwidth'` and returning the raw
-    per-sample gradient matrix (for X only) instead of the lambda-path-averaged
-    scalar importances.
+    Shares `prismGImportances`'s training-loop parameters -- see that docstring
+    for details; this function differs only in defaulting `local_grad_method`
+    to `'bandwidth'` and returning the raw per-sample gradient matrix (for X
+    only) instead of the lambda-path-averaged scalar importances.
 
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.
@@ -509,7 +474,6 @@ def rangerGiniImportances(
     """
         Gini-impurity/variance-reduction importances from a single `ranger::ranger`
         random forest fit on [X, Xk] → y (`rbridge.rangerGiniImportances`).
-        This is silverknockoff's `ranger_gini` importance method.
 
         :param X: Original data (numeric + `pl.Categorical` columns).
         :param Xk: Knockoffs of `X`, same schema.
@@ -518,13 +482,12 @@ def rangerGiniImportances(
         :param verbose: Verbosity level (0 = silent).
         :param kwargs: Forwarded to `ranger::ranger` via
             `rbridge.rangerGiniImportances`/`stat.forest.hetero_gini.R`. Same
-            kwarg set as `knockoff.get_rangerSCIP` forwards (per
-            `silverknockoff`'s `_ranger_kwargs_from_params`), all optional:
+            kwarg set as `knockoff.get_rangerSCIP` forwards, all optional
+            (omitted values fall back to ranger's own defaults):
               - `num_trees` (int), `mtry` (int), `min_node_size` (int),
-                `max_depth` (int), `sample_fraction` (float), `num_threads` (int)
-                -- left at ranger's own defaults in the `synth_sweep_*_3` bundles.
-              - `respect_unordered_factors` (str) -- the one value actually tuned
-                in practice: `'partition'`.
+                `max_depth` (int), `sample_fraction` (float), `num_threads` (int).
+              - `respect_unordered_factors` (str, e.g. `'partition'`): how ranger
+                splits unordered categorical predictors.
         :returns: Array of shape (2*p,) — first p entries for X, last p for Xk.
     """
     from . import _processIsolation
@@ -553,13 +516,10 @@ def rangerPrismImportances(
         PRISM local-gradient importances using a single `ranger::ranger` forest
         fit on [X, Xk] → y (`rbridge.rangerPrismImportances`/
         `stat.forest.prism_{continuous,count,categorical}.R`) -- the ranger
-        analogue of `xgbPrismImportances`. Unlike `xgb_prism`, this has no
-        corresponding entry in `silverknockoff`'s `ImportanceMethod` (`xgb_prism`
-        is used there instead), so no real-world tuned kwarg values exist for
-        it -- document parameter meaning only; see `xgbPrismImportances`'s
-        docstring for the algorithm description (numeric = bandwidth
-        finite-difference, categorical = max-minus-min level sweep, categorical
-        outcome = Mahalanobis norm of log-probability contrasts).
+        analogue of `xgbPrismImportances`; see that docstring for the algorithm
+        description (numeric = bandwidth finite-difference, categorical =
+        max-minus-min level sweep, categorical outcome = Mahalanobis norm of
+        log-probability contrasts).
 
         :param X: Original data (numeric + `pl.Categorical` columns).
         :param Xk: Knockoffs of `X`, same schema.
@@ -603,7 +563,6 @@ def xgbImportances(
         Split-based importances (weight/gain/cover/...) from a single xgboost model
         fit on [X, Xk]. Categorical columns are handled natively by xgboost
         (tree_method='hist', enable_categorical=True), not one-hot encoded.
-        This is silverknockoff's `xgb_score` importance method.
 
         :param X: Original data (numeric + `pl.Categorical` columns).
         :param Xk: Knockoffs of `X`, same schema.
@@ -612,19 +571,13 @@ def xgbImportances(
         :param importance_type: Which `Booster.get_score()` importance type to
             report -- `'weight'` (split count), `'gain'` (avg. loss reduction
             per split), `'cover'` (avg. samples affected per split),
-            `'total_gain'`, `'total_cover'`. All three of `'gain'`,
-            `'total_gain'`, `'weight'` are tuned/compared side-by-side in the
-            `synth_sweep_*_3` bundles (as separate importance rows sharing the
-            same `model_kwargs`).
+            `'total_gain'`, `'total_cover'`. Default `'gain'`.
         :param verbose: Verbosity level (0 = silent).
         :param kwargs: `model_kwargs` (dict, forwarded to the
-            `XGBRegressor`/`XGBClassifier` constructor), plus anything else
-            forwarded to `XGBRegressor`/`XGBClassifier.fit`. Tuned
-            `model_kwargs` seen across the `synth_sweep_categorical_3`/
-            `synth_sweep_count_3` bundles for `xgb_score` (identical set used
-            for `xgb_shap`): `max_depth=7, learning_rate=0.019,
-            min_child_weight=0.031, subsample=0.58, colsample_bytree=0.97,
-            reg_alpha=1.1, reg_lambda=0.017, gamma=3.3, n_estimators=1000`. See
+            `XGBRegressor`/`XGBClassifier` constructor -- e.g. `max_depth`,
+            `learning_rate`, `min_child_weight`, `subsample`, `colsample_bytree`,
+            `reg_alpha`, `reg_lambda`, `gamma`, `n_estimators`), plus anything
+            else forwarded to `XGBRegressor`/`XGBClassifier.fit`. See
             https://xgboost.readthedocs.io/en/latest/python/python_api.html for
             the full parameter reference and
             https://xgboost.readthedocs.io/en/latest/tutorials/categorical.html
@@ -662,7 +615,6 @@ def xgbPrismImportances(
         PRISM local-gradient importance using a single xgboost model on [X, Xk].
         Mirrors the R stat.forest.prism_{continuous,count,categorical}.R scripts,
         using xgboost's native categorical handling instead of one-hot encoding.
-        This is silverknockoff's `xgb_prism` importance method.
 
         :param X: Original data (numeric + `pl.Categorical` columns).
         :param Xk: Knockoffs of `X`, same schema.
@@ -670,26 +622,16 @@ def xgbPrismImportances(
         :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
         :param verbose: Verbosity level (0 = silent).
         :param kwargs: `bandwidth` (float, scale multiplier for the numeric
-            finite-difference step, `sd(col) * bandwidth / n ** bandwidth_exponent`),
-            `bandwidth_exponent` (float, sample-size exponent in that
-            denominator), `exponent` (float, power applied to each pointwise
-            importance before averaging), and `model_kwargs` (dict, forwarded to
-            the `XGBRegressor`/`XGBClassifier` constructor), plus anything else
-            forwarded to `XGBRegressor`/`XGBClassifier.fit`. Two distinct tuned
-            configurations seen across the `synth_sweep_*_3` bundles:
-              - `synth_sweep_count_3`: `bandwidth=2.7, bandwidth_exponent=0.31,
-                exponent=1.8`, `model_kwargs`: `max_depth=7, learning_rate=0.019,
-                min_child_weight=0.031, subsample=0.58, colsample_bytree=0.97,
-                reg_alpha=1.1, reg_lambda=0.017, gamma=3.3, n_estimators=1000`
-                (same `model_kwargs` as `xgb_score`/`xgb_shap`).
-              - `synth_sweep_categorical_3`: `bandwidth=5.0,
-                bandwidth_exponent=0.15, exponent=3.0`, `model_kwargs`:
-                `max_depth=10, learning_rate=0.0065, min_child_weight=0.087,
-                subsample=0.67, colsample_bytree=0.96, reg_alpha=9.7,
-                reg_lambda=0.00021, gamma=0.093, n_estimators=55` (much smaller
-                `n_estimators`/`learning_rate` than the other bundle -- fewer,
-                slower-learning, deeper trees).
-            See https://xgboost.readthedocs.io/en/latest/python/python_api.html
+            finite-difference step, `sd(col) * bandwidth / n ** bandwidth_exponent`;
+            default `1.0`), `bandwidth_exponent` (float, sample-size exponent in
+            that denominator; default `0.2`), `exponent` (float, power applied
+            to each pointwise importance before averaging; default `1.0`), and
+            `model_kwargs` (dict, forwarded to the `XGBRegressor`/`XGBClassifier`
+            constructor -- e.g. `max_depth`, `learning_rate`, `min_child_weight`,
+            `subsample`, `colsample_bytree`, `reg_alpha`, `reg_lambda`, `gamma`,
+            `n_estimators`), plus anything else forwarded to
+            `XGBRegressor`/`XGBClassifier.fit`. See
+            https://xgboost.readthedocs.io/en/latest/python/python_api.html
             for the full `model_kwargs` reference.
         :param rng: If given, seeds the XGBoost fit (random_state=rng) for
             reproducibility. Unseeded if omitted.
@@ -723,21 +665,16 @@ def xgbShapImportances(
 
         Requires the optional `shap` dependency: pip install heteroknockoffpy[shap]
 
-        This is silverknockoff's `xgb_shap` importance method.
-
         :param X: Original data (numeric + `pl.Categorical` columns).
         :param Xk: Knockoffs of `X`, same schema.
         :param y: Outcome; scalar (continuous/count) or categorical Series/DataFrame.
         :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
         :param verbose: Verbosity level (0 = silent).
         :param kwargs: `model_kwargs` (dict, forwarded to the
-            `XGBRegressor`/`XGBClassifier` constructor), plus anything else
-            forwarded to `XGBRegressor`/`XGBClassifier.fit`. Tuned
-            `model_kwargs` seen across the `synth_sweep_categorical_3`/
-            `synth_sweep_count_3` bundles (identical set used for `xgb_score`):
-            `max_depth=7, learning_rate=0.019, min_child_weight=0.031,
-            subsample=0.58, colsample_bytree=0.97, reg_alpha=1.1,
-            reg_lambda=0.017, gamma=3.3, n_estimators=1000`. See
+            `XGBRegressor`/`XGBClassifier` constructor -- e.g. `max_depth`,
+            `learning_rate`, `min_child_weight`, `subsample`, `colsample_bytree`,
+            `reg_alpha`, `reg_lambda`, `gamma`, `n_estimators`), plus anything
+            else forwarded to `XGBRegressor`/`XGBClassifier.fit`. See
             https://xgboost.readthedocs.io/en/latest/python/python_api.html for
             the full parameter reference.
         :param rng: If given, seeds the XGBoost fit (random_state=rng) for
@@ -793,11 +730,6 @@ def lassoImportances(
                          `solver='saga'` (multi-class: Mahalanobis distance on
                          contrasted coefficients, mirroring the OHE-collapse
                          convention used by `lassoImportances`'s sibling functions)
-        Not tuned/exercised by any `silverknockoff` bundle to date (no `LASSO`
-        parameter row carries extra kwargs beyond the defaults below), so the
-        values noted are the in-code defaults actually relied on in practice,
-        not empirically-tuned values.
-
         :param X: Original data (numeric + `pl.Categorical` columns).
         :param Xk: Knockoffs of `X`, same schema.
         :param y: Outcome; scalar (continuous/count) or categorical Series/DataFrame.
@@ -1050,8 +982,7 @@ def ridgeImportances(
     - categorical: sklearn LogisticRegressionCV with penalty='l2', solver='lbfgs'
 
     All other logic (OHE, oheDict collapsing, multi-class Mahalanobis, exponent)
-    is identical to lassoImportances. Like `lassoImportances`, not tuned/exercised
-    by any `silverknockoff` bundle to date -- values below are in-code defaults.
+    is identical to lassoImportances.
 
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.
@@ -1265,9 +1196,6 @@ def elasticImportances(
     - count:      PoissonLassoCV with L1_wt=l1_ratio (statsmodels elastic-net GLM)
     - categorical: sklearn LogisticRegressionCV with penalty='elasticnet',
                    l1_ratios=[l1_ratio], solver='saga'
-
-    Like `lassoImportances`/`ridgeImportances`, not tuned/exercised by any
-    `silverknockoff` bundle to date -- values below are in-code defaults.
 
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.

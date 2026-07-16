@@ -193,12 +193,9 @@ def get_second_order(
                 shrinks the estimated covariance matrix before drawing knockoffs
                 (recommended when `X`'s column count approaches or exceeds `X`'s
                 row count, where the raw sample covariance is ill-conditioned).
-                `False` uses the raw sample covariance directly. Not tuned
-                anywhere in `silverknockoff` today (always left at the default);
-                changing it produces materially different knockoffs (confirmed
-                empirically -- large deviation on a small correlated-Gaussian
-                test array), so it's worth setting explicitly when `p` is large
-                relative to `n`.
+                `False` uses the raw sample covariance directly; changing it
+                produces materially different knockoffs (confirmed empirically),
+                so it's worth setting explicitly when `p` is large relative to `n`.
             Also forwarded down to `get_withCallable`'s own `**kwargs` (currently
             unused there for either branch -- see that docstring).
         :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
@@ -248,12 +245,9 @@ def get_torchGAN(
         process (see `_processIsolation`), since torch's bundled `libomp` can
         crash alongside them.
 
-        Not currently wired up / tuned anywhere in `silverknockoff` (no
-        `synth_sweep_*` bundle exercises this method), so unlike `get_xgbSCIP`/
-        `xgbImportances` there's no real-world "commonly tuned" value set to cite
-        here -- the parameter meanings below (from `TorchGAN.__init__`/`.fit_predict`
-        in `heteroknockofftorch/torchKnockoffs.py`) and their function-signature
-        defaults are what's actually exercised in this codebase today.
+        Parameter meanings below are sourced from `TorchGAN.__init__`/
+        `.fit_predict` in `heteroknockofftorch/torchKnockoffs.py`; the values
+        noted are this function's own signature defaults.
 
         :param X: Original data (numeric + `pl.Categorical` columns).
         :param rng: Seeds `categorical_method`'s randomness (see
@@ -355,10 +349,7 @@ def get_rangerSCIP(
         :param kwargs: Forwarded to `rbridge.get_knockoffs_SCIP`, which forwards
             its own remaining kwargs to `ranger::ranger` for both the per-column
             probability forests (categorical) and regression forests (numeric).
-            The kwargs `silverknockoff` tunes/forwards for ranger-based importance
-            methods (`_ranger_kwargs_from_params` in
-            `silverknockoff/src/silverknockoff/cellOps/calculatorOps.py`), all
-            optional and omitted (letting ranger use its own default) when absent:
+            All optional and omitted (letting ranger use its own default) when absent:
               - `num_trees` (int): number of trees in the forest.
               - `mtry` (int): number of variables randomly sampled as candidates
                 at each split.
@@ -368,11 +359,9 @@ def get_rangerSCIP(
               - `sample_fraction` (float): fraction of observations sampled per tree.
               - `num_threads` (int): number of threads for ranger to use.
               - `respect_unordered_factors` (str, e.g. `'partition'`): how ranger
-                splits unordered categorical predictors -- `'partition'` is the
-                only value actually tuned/used across the `synth_sweep_*_3`
-                bundles (both `ranger_gini` importances and the SCIP scripts
-                default to it too, per `scip.knockoffs.R`'s
-                `.scip.fit_probability_forest`/`.scip.fit_regression_forest`).
+                splits unordered categorical predictors; `scip.knockoffs.R`'s
+                `.scip.fit_probability_forest`/`.scip.fit_regression_forest`
+                default to `'partition'` when this kwarg is omitted.
         :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
     """
     from . import _processIsolation
@@ -415,8 +404,7 @@ def get_xgbSCIP(
         :param kwargs: Forwarded to xgboost.XGBRegressor/XGBClassifier -- see
             `xgbScip`'s module docstring for the relevant kwargs (max_depth,
             learning_rate, min_child_weight, subsample, colsample_bytree,
-            reg_alpha, reg_lambda, gamma, n_estimators) and their tuned
-            values, and
+            reg_alpha, reg_lambda, gamma, n_estimators), and
             https://xgboost.readthedocs.io/en/latest/python/python_api.html
             for the full reference.
     """
