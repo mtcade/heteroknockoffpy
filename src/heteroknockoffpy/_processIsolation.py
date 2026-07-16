@@ -20,6 +20,7 @@ import multiprocessing
 # Keying by module path only works because of this invariant.
 _GUARDED_MODULES: dict[ str, str ] = {
     'heteroknockoffpy.xgbImportances': 'xgboost',
+    'heteroknockoffpy.xgbScip': 'xgboost',
     'heteroknockoffpy.heteroknockofftorch.prismImportances': 'torch',
     'heteroknockoffpy.heteroknockofftorch.torchKnockoffs': 'torch',
     'heteroknockoffpy.rbridge': 'rpy2',

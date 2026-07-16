@@ -4,7 +4,7 @@
 #//
 #//  Tests for heteroknockoffpy._processIsolation.run_isolated_if_loaded, plus
 #//  end-to-end coverage of the actual scenario it exists for: calling every
-#//  xgb*/prism* importance.py function (and knockoff.get_knockoffs's GAN_torch
+#//  xgb*/prism* importance.py function (and knockoff.get_knockoffs's torch_GAN
 #//  path) in both possible orders (xgboost-family first vs. torch-family
 #//  first), confirming the "second" family's calls are transparently isolated
 #//  into a subprocess rather than crashing.
@@ -181,10 +181,10 @@ assert {other_family!r} not in sys.modules, "prismWImportancesPerOHE leaked {oth
 
 _GAN_TORCH_CALL_TEMPLATE = """
 Xk_gan = knockoff.get_knockoffs(
-    X, method="GAN_torch", rng=rng, categorical_method="ohe", niter=3,
+    X, method="torch_GAN", rng=rng, categorical_method="ohe", niter=3,
 )
 assert Xk_gan.shape == (n, 1), Xk_gan.shape
-assert {other_family!r} not in sys.modules, "GAN_torch leaked {other_family}"
+assert {other_family!r} not in sys.modules, "torch_GAN leaked {other_family}"
 """
 
 

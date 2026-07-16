@@ -12,7 +12,7 @@ Based on the knockoff filter framework ([Candès et al., 2018](https://academic.
 pip install heteroknockoffpy
 ```
 
-`categorical_method='forest'` and `method='SCIP'` require R and `rpy2`. Install the `ranger` and `rangerKnockoff` R packages before using them.
+`categorical_method='forest'`, `categorical_method='ranger_scip'`, and `method='ranger_SCIP'` require R and `rpy2`. Install the `ranger` and `rangerKnockoff` R packages before using them. `categorical_method='xgb_scip'` and `method='xgb_SCIP'` use `xgboost` instead and don't require R.
 
 On macOS, `xgboost` requires OpenMP:
 
@@ -24,11 +24,12 @@ brew install libomp
 
 `torch` and `xgboost` each load their own copy of `libomp`, and having both in one process
 crashes on macOS. The public API handles this transparently: any `heteroknockoffpy.importance`
-`xgb*`/`prism*` call, and `knockoff.get_knockoffs(method="GAN_torch")`, automatically runs in an
-isolated subprocess whenever it would introduce the second library into a process that already
-has the other loaded — so mixing them in the same script or notebook just works, with no extra
-setup. Because this can spawn a subprocess, guard top-level driver code with
-`if __name__ == "__main__":`, per normal Python `multiprocessing` requirements.
+`xgb*`/`prism*` call, and `knockoff.get_knockoffs(method="torch_GAN")` / `method="xgb_SCIP"` /
+`categorical_method="xgb_scip"`, automatically runs in an isolated subprocess whenever it would
+introduce the second library into a process that already has the other loaded — so mixing them
+in the same script or notebook just works, with no extra setup. Because this can spawn a
+subprocess, guard top-level driver code with `if __name__ == "__main__":`, per normal Python
+`multiprocessing` requirements.
 
 (If you bypass the public API and import `heteroknockoffpy.heteroknockofftorch.torchImportances`
 and `heteroknockoffpy.xgbImportances` directly yourself, this isolation doesn't apply —
@@ -47,7 +48,7 @@ rng = np.random.default_rng(0)
 # X is a polars DataFrame; categorical columns must have dtype pl.Categorical
 Xk = knockoff.get_knockoffs(
     X,
-    method="second_order",   # "second_order" | "GAN_torch" | "SCIP"
+    method="second_order",   # "second_order" | "torch_GAN" | "ranger_SCIP" | "xgb_SCIP"
     rng=rng,
     categorical_method="forest",
 )
@@ -58,25 +59,27 @@ Xk = knockoff.get_knockoffs(
 | value | behavior |
 |---|---|
 | `'second_order'` | Matches the first two moments (mean and covariance) of X. Fast and closed-form via the R `knockoff` package. Works well when the joint distribution is approximately Gaussian; may lose power in strongly non-linear settings. |
-| `'GAN_torch'` | Trains a GAN in PyTorch to learn the full joint distribution of X and generate knockoffs that are indistinguishable from it. Slower than second-order but can capture non-Gaussian and non-linear dependence structures. |
-| `'SCIP'` | Sorted L1 Penalized Inference knockoffs via the `rangerKnockoff` R package. Fits a ranger random forest per column to estimate conditional distributions, then generates knockoffs from those conditional models. The most statistically principled method for non-parametric joint distributions. |
+| `'torch_GAN'` | Trains a GAN in PyTorch to learn the full joint distribution of X and generate knockoffs that are indistinguishable from it. Slower than second-order but can capture non-Gaussian and non-linear dependence structures. |
+| `'ranger_SCIP'` | Sequential Conditional Independence Procedure knockoffs via the `rangerKnockoff`/`ranger` R packages. Fits a ranger random forest per column (conditioning on all original columns plus all previously generated knockoffs) to estimate conditional distributions, then generates knockoffs from those conditional models. The most statistically principled method for non-parametric joint distributions. |
+| `'xgb_SCIP'` | Same SCIP algorithm as `'ranger_SCIP'`, but each column's conditional model is a sequential [`xgboost.XGBRegressor`/`XGBClassifier`](https://xgboost.readthedocs.io/en/latest/python/python_api.html) instead of an R ranger forest — no R/`rpy2` dependency. See `heteroknockoffpy.xgbScip` for the tuned `model_kwargs` typically used (`max_depth`, `learning_rate`, `min_child_weight`, `subsample`, `colsample_bytree`, `reg_alpha`, `reg_lambda`, `gamma`, `n_estimators`). |
 
 ### `categorical_method`
 
-Controls how categorical columns are encoded before knockoffs are generated. Not applicable when `method='SCIP'` (which handles categoricals natively).
+Controls how categorical columns are encoded before knockoffs are generated. Not applicable when `method` is `'ranger_SCIP'` or `'xgb_SCIP'` (which handle categoricals natively).
 
 | value | behavior |
 |---|---|
 | `'forest'` | Fits a ranger random forest per categorical column; uses predicted class-probability logits as a soft numeric encoding |
 | `'linear'` | Same, but with logistic regression — lighter and faster |
 | `'ohe'` | Hard one-hot-encodes categories as floats; no probability smoothing |
-| `'scip'` | For numeric columns, operates on conditional residuals `X_j − E[X_j | X_{-j}]` so knockoffs respect the joint distribution; for categorical columns uses forest-SCIP |
+| `'ranger_scip'` | For numeric columns, operates on conditional residuals `X_j − E[X_j | X_{-j}]` so knockoffs respect the joint distribution; for categorical columns uses ranger forest-SCIP |
+| `'xgb_scip'` | Same as `'ranger_scip'`, but conditional expectations and categorical SCIP knockoffs are computed with sequential [`xgboost`](https://xgboost.readthedocs.io/en/latest/python/python_api.html) models instead of R ranger — no R/`rpy2` dependency |
 
-`'scip'` is the most statistically principled approach for mixed data. `'forest'` or `'linear'` are convenient defaults when a quick approximation is acceptable.
+`'ranger_scip'`/`'xgb_scip'` are the most statistically principled approaches for mixed data. `'forest'` or `'linear'` are convenient defaults when a quick approximation is acceptable.
 
 ### `conditional_expectations`
 
-A `pl.DataFrame` of shape `(n, p_numeric)` giving `E[X_j | X_{-j}]` for each numeric column. Only relevant when `categorical_method='scip'`.
+A `pl.DataFrame` of shape `(n, p_numeric)` giving `E[X_j | X_{-j}]` for each numeric column. Only relevant when `categorical_method` is `'ranger_scip'` or `'xgb_scip'`.
 
 ```python
 from heteroknockoffpy import rbridge
@@ -84,15 +87,17 @@ from heteroknockoffpy import rbridge
 # compute once, reuse across multiple knockoff draws
 ce = rbridge.get_forest_conditional_expectations(X)
 
-Xk1 = knockoff.get_knockoffs(X, method="GAN_torch", rng=rng,
-                               categorical_method="scip",
+Xk1 = knockoff.get_knockoffs(X, method="torch_GAN", rng=rng,
+                               categorical_method="ranger_scip",
                                conditional_expectations=ce)
-Xk2 = knockoff.get_knockoffs(X, method="GAN_torch", rng=rng,
-                               categorical_method="scip",
+Xk2 = knockoff.get_knockoffs(X, method="torch_GAN", rng=rng,
+                               categorical_method="ranger_scip",
                                conditional_expectations=ce)
 ```
 
-If `conditional_expectations=None` (the default) and `categorical_method='scip'`, the package computes them internally using R `ranger::ranger`. Pass a pre-computed frame to avoid refitting the forest on every call.
+If `conditional_expectations=None` (the default) and `categorical_method='ranger_scip'`, the package computes them internally using R `ranger::ranger`
+(`rbridge.get_forest_conditional_expectations`). For `categorical_method='xgb_scip'`, it uses sequential `xgboost.XGBRegressor` models instead
+(`xgbScip.get_forest_conditional_expectations`). Pass a pre-computed frame to avoid refitting on every call.
 
 ---
 
