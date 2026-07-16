@@ -85,6 +85,26 @@ def test_second_order_xgb_scip_mixed_schema_matches():
     assert len(Xk) == len(X)
 
 
+def test_second_order_shrink_kwarg_is_forwarded():
+    # Regression test: get_second_order's knockoffCallable used to have its
+    # **kwargs forwarding commented out, so e.g. shrink=False silently had no
+    # effect (always used rbridge's shrink=True default). Confirm the kwarg
+    # now actually reaches rKnockoff.create_second_order and changes output.
+    n = 200
+    rng = np.random.default_rng(0)
+    x0 = rng.standard_normal(n)
+    x1 = rng.standard_normal(n) + 0.5 * x0
+    X = pl.DataFrame({"x0": x0, "x1": x1})
+
+    Xk_shrink = knockoff.get_second_order(
+        X, rng=np.random.default_rng(1), categorical_method="ohe", shrink=True,
+    )
+    Xk_noshrink = knockoff.get_second_order(
+        X, rng=np.random.default_rng(1), categorical_method="ohe", shrink=False,
+    )
+    assert not Xk_shrink.equals(Xk_noshrink)
+
+
 def test_unrecognized_method_raises():
     X, rng = _make_mixed(n=10)
     with pytest.raises(ValueError):

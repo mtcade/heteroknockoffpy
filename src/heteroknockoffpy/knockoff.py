@@ -27,6 +27,17 @@ def get_withCallable(
     **kwargs,
     ) -> np.ndarray:
     """
+        Shared plumbing behind `get_second_order`/`get_torchGAN`: handles the
+        `categorical_method` switch (numeric-residual/SCIP path vs. one-hot-encode
+        path), then hands the resulting numeric array to `knockoffCallable` to
+        produce the actual knockoff draw, and converts the result back to a
+        `pl.DataFrame` matching `X`'s schema.
+
+        :param X: Original data (numeric + `pl.Categorical` columns).
+        :param rng: Used to seed the R/xgboost/OHE-sampling randomness downstream
+            (in the SCIP conditional-expectation/categorical-sampling steps, and
+            in `utilities.collapse_ohe`'s softmax sampling for the OHE-based
+            categorical_methods).
         :param categorical_method:
             - 'forest': Get logit probabilities with random forests
             - 'linear': Get logit probabilities with logistic regression
@@ -35,6 +46,18 @@ def get_withCallable(
             - 'xgb_scip': Same as 'ranger_scip', but conditional expectations/categorical SCIP are computed with sequential xgboost models instead of R ranger
         :param knockoffCallable: Closure to convert either conditional residuals or one-hot-encoded data to knockoffs of the same format. Make sure it has the desired parameters based on whether you are using ranger_scip/xgb_scip, or another method
         :param conditional_expectations: Numeric conditional expectations. If not provided, uses `rbridge.get_forest_conditional_expectations` (for `categorical_method='ranger_scip'`) or `xgbScip.get_forest_conditional_expectations` (for `categorical_method='xgb_scip'`) to calculate
+        :param verbose: Verbosity level (0 = silent), forwarded to whichever
+            backend (`rbridge`/`xgbScip`) is doing the categorical-preprocessing work.
+        :param verbose_prefix: String prepended to any verbose print output, for
+            nesting context when called from a higher-level loop.
+        :param kwargs: Currently unused here for the `'ranger_scip'`/`'xgb_scip'`
+            branch (deliberately *not* forwarded to the conditional-expectation
+            calls -- those take backend-specific kwargs like ranger's `num_trees`/
+            `mtry` that would collide in meaning with kwargs meant for
+            `knockoffCallable`'s own call, e.g. `second_order`'s `shrink`); also
+            unused for the `'forest'`/`'linear'`/`'ohe'` branch. Reserved for
+            future per-categorical_method tuning.
+        :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
     """
     X = _resolve_df(X)
     if categorical_method in ( 'ranger_scip', 'xgb_scip' ):
@@ -145,9 +168,40 @@ def get_second_order(
     **kwargs,
     ) -> pl.DataFrame:
     """
-        Second order method from rbridge, using r knockoff
-        
+        Second-order (Gaussian-moment-matching) knockoffs via R `knockoff::create.second_order`
+        (`rbridge.get_knockoffs_second_order_np`), the fastest/closed-form method:
+        matches the first two moments (mean, covariance) of the (optionally
+        OHE'd/SCIP-residual) numeric array. Categorical columns are handled by
+        `get_withCallable` per `categorical_method` before this ever touches R.
+
+        :param X: Original data (numeric + `pl.Categorical` columns).
+        :param rng: Seeds both `categorical_method`'s randomness (see
+            `get_withCallable`) and R's RNG (via `set.seed`) for the
+            `create_second_order` draw itself.
+        :param categorical_method: See `get_withCallable`'s docstring for the
+            full list ('forest'/'linear'/'ohe'/'ranger_scip'/'xgb_scip'); 'ranger_scip'/'xgb_scip'
+            route numeric columns through conditional-residual knockoffs (this
+            function's second-order draw operates on the *residuals*, not the raw
+            columns) and categorical columns through backend-specific SCIP.
         :param conditional_expectations: Numeric conditional expectations. If not provided, uses `rbridge.get_forest_conditional_expectations`/`xgbScip.get_forest_conditional_expectations` to calculate, if `categorical_method` in ('ranger_scip', 'xgb_scip')
+        :param verbose: Verbosity level (0 = silent), forwarded through to the R call.
+        :param verbose_prefix: String prepended to any verbose print output.
+        :param kwargs: Forwarded to `rbridge.get_knockoffs_second_order_np`, which
+            forwards its own remaining kwargs to R `knockoff::create.second_order`.
+            The one kwarg it specifically recognizes:
+              - `shrink` (bool, default `True`): whether `create.second_order`
+                shrinks the estimated covariance matrix before drawing knockoffs
+                (recommended when `X`'s column count approaches or exceeds `X`'s
+                row count, where the raw sample covariance is ill-conditioned).
+                `False` uses the raw sample covariance directly. Not tuned
+                anywhere in `silverknockoff` today (always left at the default);
+                changing it produces materially different knockoffs (confirmed
+                empirically -- large deviation on a small correlated-Gaussian
+                test array), so it's worth setting explicitly when `p` is large
+                relative to `n`.
+            Also forwarded down to `get_withCallable`'s own `**kwargs` (currently
+            unused there for either branch -- see that docstring).
+        :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
     """
     from . import _processIsolation
 
@@ -159,11 +213,10 @@ def get_second_order(
             verbose = verbose,
             verbose_prefix = verbose_prefix,
             rng = rng,
-            #*kwargs
+            **kwargs,
         )
     #/def knockoffCallable
-    
-    # TODO: #**kwargs
+
     return get_withCallable(
         X = X,
         rng = rng,
@@ -185,6 +238,65 @@ def get_torchGAN(
     verbose_prefix: str = '',
     **kwargs,
     ) -> pl.DataFrame:
+    """
+        GAN-based knockoffs: trains a `heteroknockofftorch.torchKnockoffs.TorchGAN`
+        (generator + discriminator + WGAN-critic + MINE mutual-information
+        critic) on the (optionally OHE'd/SCIP-residual) numeric array and uses
+        the trained generator to produce knockoffs. Slower than `second_order`
+        but can capture non-Gaussian/non-linear dependence structure. Runs in an
+        isolated subprocess whenever `xgboost`/`rpy2` are already loaded in this
+        process (see `_processIsolation`), since torch's bundled `libomp` can
+        crash alongside them.
+
+        Not currently wired up / tuned anywhere in `silverknockoff` (no
+        `synth_sweep_*` bundle exercises this method), so unlike `get_xgbSCIP`/
+        `xgbImportances` there's no real-world "commonly tuned" value set to cite
+        here -- the parameter meanings below (from `TorchGAN.__init__`/`.fit_predict`
+        in `heteroknockofftorch/torchKnockoffs.py`) and their function-signature
+        defaults are what's actually exercised in this codebase today.
+
+        :param X: Original data (numeric + `pl.Categorical` columns).
+        :param rng: Seeds `categorical_method`'s randomness (see
+            `get_withCallable`); NOT used to seed torch's own RNG (the GAN
+            training loop uses torch's ambient/global RNG state, unseeded).
+        :param categorical_method: See `get_withCallable`'s docstring for the
+            full list ('forest'/'linear'/'ohe'/'ranger_scip'/'xgb_scip').
+        :param conditional_expectations: Numeric conditional expectations. If not
+            provided, uses `rbridge.get_forest_conditional_expectations`/
+            `xgbScip.get_forest_conditional_expectations` to calculate, if
+            `categorical_method` in ('ranger_scip', 'xgb_scip').
+        :param verbose: Verbosity level (0 = silent). Currently unused by this
+            function's own body (not forwarded into `fit_predict`, which has no
+            verbose output), but still threaded through to `get_withCallable`.
+        :param verbose_prefix: String prepended to any verbose print output.
+        :param kwargs: Named GAN hyperparameters, each individually plucked out
+            (via `kwargs.get(name, default)`, so unrecognized extra kwargs are
+            silently ignored rather than erroring) and forwarded to
+            `heteroknockofftorch.torchKnockoffs.fit_predict`/`TorchGAN`:
+              - `x_name` (str, default `'Normal'`): label for the input
+                distribution family, passed straight through to `TorchGAN`
+                (used for logging/bookkeeping, not the training math itself).
+              - `lamda` (float, default `1`): weight on the MINE mutual-information
+                loss term in the generator's loss (`generator_loss = -D_loss +
+                mu * -WD_fake.mean() + lamda * M_loss`) -- discourages the
+                knockoffs from encoding excess information about which columns
+                are "real" vs. "knockoff".
+              - `mu` (float, default `1`): weight on the WGAN critic loss term in
+                the same generator loss expression above.
+              - `lam` (float, default `10`): WGAN gradient-penalty coefficient
+                (`lam * ((grad_norm - 1) ** 2).mean()`), the standard WGAN-GP
+                Lipschitz-constraint weight.
+              - `lr` (float, default `1e-4`): Adam learning rate shared by the
+                generator and all three critics (discriminator, WGAN-discriminator,
+                MINE).
+              - `mb_size` (int, default `128`): minibatch size for training.
+              - `niter` (int, default `2000`): number of training iterations.
+              - `combined_inner` (bool, default `False`): if `True`, the
+                discriminator + WGAN-discriminator + MINE critics share a single
+                Adam optimizer instead of three separate ones (fewer optimizer
+                objects, coupled step sizes across the three critic losses).
+        :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
+    """
     from . import _processIsolation
 
     def knockoffCallable( x: np.ndarray ) -> np.ndarray:
@@ -225,11 +337,43 @@ def get_rangerSCIP(
     ) -> pl.DataFrame:
     """
         Full sequential SCIP knockoff generation via R ranger (rbridge).
+        Each column's knockoff conditions on all original columns plus all
+        previously generated knockoffs; categorical columns are handled natively
+        (probability-forest sampling), so this needs no separate
+        `categorical_method` -- see `xgbScip`'s module docstring / `scip.knockoffs.R`
+        for the full algorithm description (`get_xgbSCIP` is the xgboost-based
+        drop-in alternative with an identical call shape).
 
-        :param SCIP_method: Passed to `rangerKnockoff::create.forest.SCIP` as `method` parameter
-        :param kwargs:
-            - `rangerKnockoff::create.forest.SCIP` for creating numeric knockoffs
-            - Others: Passed to `ranger::ranger`
+        :param X: Original data (numeric + `pl.Categorical` columns).
+        :param rng: Seeds R's RNG (`set.seed`) for both the categorical sampling
+            draw and the numeric residual draw.
+        :param residuals_method: "normal" (default) -- numeric knockoff residual
+            drawn from `N(0, sd(residuals, ddof=1))` -- or "permute" -- residual
+            is a random permutation of the observed residuals.
+        :param verbose: Verbosity level (0 = silent), forwarded to the R call.
+        :param verbose_prefix: String prepended to any verbose print output.
+        :param kwargs: Forwarded to `rbridge.get_knockoffs_SCIP`, which forwards
+            its own remaining kwargs to `ranger::ranger` for both the per-column
+            probability forests (categorical) and regression forests (numeric).
+            The kwargs `silverknockoff` tunes/forwards for ranger-based importance
+            methods (`_ranger_kwargs_from_params` in
+            `silverknockoff/src/silverknockoff/cellOps/calculatorOps.py`), all
+            optional and omitted (letting ranger use its own default) when absent:
+              - `num_trees` (int): number of trees in the forest.
+              - `mtry` (int): number of variables randomly sampled as candidates
+                at each split.
+              - `min_node_size` (int): minimum number of observations in a
+                terminal node.
+              - `max_depth` (int): maximum tree depth (0 = unlimited, ranger's default).
+              - `sample_fraction` (float): fraction of observations sampled per tree.
+              - `num_threads` (int): number of threads for ranger to use.
+              - `respect_unordered_factors` (str, e.g. `'partition'`): how ranger
+                splits unordered categorical predictors -- `'partition'` is the
+                only value actually tuned/used across the `synth_sweep_*_3`
+                bundles (both `ranger_gini` importances and the SCIP scripts
+                default to it too, per `scip.knockoffs.R`'s
+                `.scip.fit_probability_forest`/`.scip.fit_regression_forest`).
+        :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
     """
     from . import _processIsolation
 
@@ -256,8 +400,18 @@ def get_xgbSCIP(
     """
         Full sequential SCIP knockoff generation via sequential xgboost models
         (xgbScip) -- a drop-in alternative to `get_rangerSCIP` that doesn't
-        require R/rpy2.
+        require R/rpy2. Same algorithm/call shape as `get_rangerSCIP`; see
+        `xgbScip`'s module docstring for the full sequential-SCIP description.
 
+        :param X: Original data (numeric + `pl.Categorical` columns).
+        :param rng: Used directly (no separate R/native seed dance) for both the
+            categorical sampling draw (`utilities.choices_from_weights`) and the
+            numeric residual draw (`rng.normal`/`rng.permutation`).
+        :param residuals_method: "normal" (default) -- numeric knockoff residual
+            drawn from `N(0, sd(residuals, ddof=1))` via `rng.normal` -- or
+            "permute" -- residual is `rng.permutation(residuals)`.
+        :param verbose: Verbosity level (0 = silent).
+        :param verbose_prefix: String prepended to any verbose print output.
         :param kwargs: Forwarded to xgboost.XGBRegressor/XGBClassifier -- see
             `xgbScip`'s module docstring for the relevant kwargs (max_depth,
             learning_rate, min_child_weight, subsample, colsample_bytree,
