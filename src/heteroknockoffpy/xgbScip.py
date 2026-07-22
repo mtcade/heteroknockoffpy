@@ -99,12 +99,33 @@ def _make_classifier(
 #/def _make_classifier
 
 
+def _categories_for( X: pl.DataFrame, col: str ) -> list[ str ]:
+    """
+        Sorted, fixed category labels actually present in X[col].
+
+        Deliberately NOT `X[col].cat.get_categories()`: polars' Categorical
+        dtype now backs every categorical column with one process-global
+        dictionary (`pl.Categories`), so `.cat.get_categories()` returns the
+        union of categories seen across *every* Categorical column/array
+        built so far in the process, not just this column's own values.
+        With several categorical columns in X, that silently hands
+        `_fit_probability_forest` a category list far larger than col's real
+        cardinality, and the resulting non-contiguous xgboost class codes
+        raise "Invalid classes inferred from unique values of `y`." Casting
+        to Utf8 first and taking this column's own unique values sidesteps
+        the shared dictionary entirely.
+    """
+    return sorted( X[ col ].cast( pl.Utf8 ).unique().drop_nulls().to_list() )
+#/def _categories_for
+
+
 def _fit_probability_forest(
     scip_pd: pd.DataFrame,
     col: str,
     categories: list[ str ],
     rng: np.random.Generator | None,
     model_kwargs: dict,
+    weight: np.ndarray | None = None,
     ) -> np.ndarray:
     """
         Fit an XGBClassifier predicting factor column `col` from all other
@@ -125,7 +146,7 @@ def _fit_probability_forest(
     y_codes: np.ndarray = pd.Categorical( scip_pd[ col ], categories = categories ).codes.astype( np.int64 )
 
     model = _make_classifier( rng, **model_kwargs )
-    model.fit( X_expl, y_codes )
+    model.fit( X_expl, y_codes, sample_weight = weight )
 
     proba: np.ndarray = model.predict_proba( X_expl )
     # xgboost only emits columns for classes seen during fit; re-expand to the
@@ -152,6 +173,7 @@ def _fit_regression_forest(
     col: str,
     rng: np.random.Generator | None,
     model_kwargs: dict,
+    weight: np.ndarray | None = None,
     ) -> np.ndarray:
     """
         Fit an XGBRegressor predicting numeric column `col` from all other
@@ -163,7 +185,7 @@ def _fit_regression_forest(
     y: np.ndarray = scip_pd[ col ].to_numpy().astype( np.float64 )
 
     model = _make_regressor( rng, **model_kwargs )
-    model.fit( X_expl, y )
+    model.fit( X_expl, y, sample_weight = weight )
 
     return model.predict( X_expl )
 #/def _fit_regression_forest
@@ -174,6 +196,7 @@ def get_forest_conditional_expectations(
     verbose: int = 0,
     verbose_prefix: str = '',
     rng: np.random.Generator | None = None,
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> pl.DataFrame:
     """
@@ -204,7 +227,7 @@ def get_forest_conditional_expectations(
     #
 
     conditional_expectations_dict: dict[ str, np.ndarray ] = {
-        col: _fit_regression_forest( X_pd, col, rng, kwargs )
+        col: _fit_regression_forest( X_pd, col, rng, kwargs, weight = weight )
         for col in numeric_columns
     }
 
@@ -223,6 +246,7 @@ def get_knockoffs_with_Xk_numeric(
     rng: np.random.Generator,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> pl.DataFrame:
     """
@@ -252,13 +276,13 @@ def get_knockoffs_with_Xk_numeric(
             continue
         #
         ko: str = col + '~'
-        categories: list[ str ] = sorted( X[ col ].cat.get_categories().to_list() )
+        categories: list[ str ] = _categories_for( X, col )
 
         if verbose > 0:
             print( verbose_prefix + 'xgb SCIP categorical column: {}'.format( col ) )
         #
 
-        probs: np.ndarray = _fit_probability_forest( scip_pd, col, categories, rng, kwargs )
+        probs: np.ndarray = _fit_probability_forest( scip_pd, col, categories, rng, kwargs, weight = weight )
         indices: np.ndarray = choices_from_weights( probs, rng = rng )
         scip_pd[ ko ] = pd.Categorical.from_codes( indices, categories = categories )
     #/for col, dtype in X.schema.items()
@@ -278,6 +302,7 @@ def get_knockoffs_SCIP(
     residuals_method: Literal['normal','permute',] = 'normal',
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> pl.DataFrame:
     """
@@ -316,13 +341,13 @@ def get_knockoffs_SCIP(
         #
 
         if dtype == pl.Categorical:
-            categories: list[ str ] = sorted( X[ col ].cat.get_categories().to_list() )
-            probs: np.ndarray = _fit_probability_forest( scip_pd, col, categories, rng, kwargs )
+            categories: list[ str ] = _categories_for( X, col )
+            probs: np.ndarray = _fit_probability_forest( scip_pd, col, categories, rng, kwargs, weight = weight )
             indices: np.ndarray = choices_from_weights( probs, rng = rng )
             scip_pd[ ko ] = pd.Categorical.from_codes( indices, categories = categories )
         #
         else:
-            cond_exp: np.ndarray = _fit_regression_forest( scip_pd, col, rng, kwargs )
+            cond_exp: np.ndarray = _fit_regression_forest( scip_pd, col, rng, kwargs, weight = weight )
             residuals: np.ndarray = X[ col ].to_numpy().astype( np.float64 ) - cond_exp
 
             if residuals_method == 'normal':

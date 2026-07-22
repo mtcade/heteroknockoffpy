@@ -362,6 +362,7 @@ def prismWImportances(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
+    weight: np.ndarray | None = None,
     ) -> np.ndarray:
     """
     PRISM-W importances: average of group-norm snapshots over a lambda regularization path.
@@ -417,6 +418,7 @@ def prismWImportances(
         lambda_path = lambda_path,
         a_path = a_path,
         batch_size = batch_size,
+        weight = weight,
     )
 
     return np.mean( snapshots, axis = 0 )
@@ -442,6 +444,7 @@ def prismWImportancesPerOHE(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
+    weight: np.ndarray | None = None,
     ) -> np.ndarray:
     """
     PRISM-W importances, but every OHE dummy column is treated as its own independent
@@ -524,6 +527,7 @@ def prismWImportancesPerOHE(
         lambda_path = lambda_path,
         a_path = a_path,
         batch_size = batch_size,
+        weight = weight,
     )
 
     return np.mean( snapshots, axis = 0 )
@@ -553,6 +557,7 @@ def prismGImportances(
     dense_activation: str = 'relu',
     verbose: int = 0,
     bandwidth_exponent: float = 0.2,
+    weight: np.ndarray | None = None,
     ) -> np.ndarray:
     """
     PRISM-G importances: average of PRISM local-gradient snapshots over a lambda path.
@@ -668,6 +673,7 @@ def prismGImportances(
         a_path = a_path,
         batch_size = batch_size,
         snapshot_fn = snapshot_fn,
+        weight = weight,
     )
 
     return np.mean( snapshots, axis = 0 )
@@ -697,6 +703,7 @@ def prismGWImportances(
     dense_activation: str = 'relu',
     verbose: int = 0,
     bandwidth_exponent: float = 0.2,
+    weight: np.ndarray | None = None,
     ) -> tuple[ np.ndarray, np.ndarray ]:
     """
     PRISM-G and PRISM-W importances from a single training pass.
@@ -814,6 +821,7 @@ def prismGWImportances(
         a_path = a_path,
         batch_size = batch_size,
         snapshot_fn = snapshot_fn,
+        weight = weight,
     )
 
     return np.mean( g_snapshots, axis=0 ), np.mean( w_snapshots, axis=0 )
@@ -905,6 +913,7 @@ def prismGLocalGradients(
     drop_first:        bool = True,
     dense_activation:  str = 'relu',
     verbose:           int = 0,
+    weight:            np.ndarray | None = None,
     ) -> np.ndarray:
     """
     Train a PRISM-G network on (X, Xk, y) and return the per-sample local gradient
@@ -950,6 +959,7 @@ def prismGLocalGradients(
         lambda_path = lambda_path,
         a_path      = a_path,
         batch_size  = batch_size,
+        weight      = weight,
     )
 
     # oheDict covers X_all = concat(X, Xk); filter to X columns only (no '~' suffix)

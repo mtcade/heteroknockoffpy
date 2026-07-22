@@ -26,6 +26,43 @@ def _prism_cycle(loader: DataLoader):
 #/def _prism_cycle
 
 
+def _weighted_loss(
+    loss_func: nn.Module,
+    pred: torch.Tensor,
+    y: torch.Tensor,
+    weight: torch.Tensor | None,
+) -> torch.Tensor:
+    """
+    Compute loss_func(pred, y), weighted by a per-sample weight if given.
+
+    loss_func is an arbitrary already-constructed nn loss module (MSELoss,
+    CrossEntropyLoss, PoissonNLLLoss, ...) with its own default reduction
+    (almost always 'mean'). To weight it without needing every caller to
+    know/rebuild the specific loss class with reduction='none', this
+    temporarily flips loss_func.reduction to 'none' (standard torch loss
+    modules all expose this attribute), takes the per-sample loss, reduces
+    any non-batch dims, then computes a weighted average -- equivalent to
+    the unweighted loss_func(pred, y) when weight is None or all-ones.
+    """
+    if weight is None:
+        return loss_func( pred, y )
+    if not hasattr( loss_func, 'reduction' ):
+        raise ValueError(
+            f"_weighted_loss: loss_func of type {type(loss_func).__name__} has no "
+            "'reduction' attribute -- can't compute a per-sample loss to weight."
+        )
+    orig_reduction = loss_func.reduction
+    loss_func.reduction = 'none'
+    try:
+        per_sample = loss_func( pred, y )
+    finally:
+        loss_func.reduction = orig_reduction
+    if per_sample.dim() > 1:
+        per_sample = per_sample.mean( dim=tuple( range( 1, per_sample.dim() ) ) )
+    return ( per_sample * weight ).sum() / weight.sum()
+#/def _weighted_loss
+
+
 # -- Network architectures
 
 class _PRISMNetworkBase(nn.Module, ABC):
@@ -513,6 +550,7 @@ class PRISMPredictionModel:
         a_path: Iterable[float] | None = None,
         batch_size: int | None = None,
         snapshot_fn: Callable[['PRISMPredictionModel', torch.Tensor], np.ndarray] | None = None,
+        weight: np.ndarray | None = None,
     ) -> list[np.ndarray]:
         """
         Train over the lambda_path; record one importance snapshot per lambda stage.
@@ -522,6 +560,14 @@ class PRISMPredictionModel:
         :param a_path: Per-stage penalty values. If None, uses lambda_path values.
         :param snapshot_fn: If None, snapshots use get_group_importances (PRISM-W).
                             Otherwise called as snapshot_fn(self, X_tensor) (for PRISM-G).
+        :param weight: Optional length-n sample weight (see `_weighted_loss`),
+            applied to the main lambda_path/no-lambda-path training loop
+            (the one that actually produces the returned snapshots) and to
+            the warmup phase's patience-check loss. The warmup/vertical_prefit
+            phases' own gradient steps stay unweighted -- they're only a
+            preliminary initialization before the real (weighted) fit, not
+            what the reported importances come from. None (default) trains
+            entirely unweighted, unchanged from before this parameter existed.
         :returns: List of importance arrays, one per lambda in lambda_path.
         """
         X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
@@ -531,6 +577,10 @@ class PRISMPredictionModel:
         else:
             y_tensor = torch.tensor(_y, dtype=torch.float32).to(self.device)
         #
+        weight_tensor: torch.Tensor | None = (
+            torch.tensor(np.asarray(weight, dtype=np.float32)).to(self.device)
+            if weight is not None else None
+        )
 
         self.model._precompute_group_reg(groups, self.device)
 
@@ -563,7 +613,7 @@ class PRISMPredictionModel:
                     batch_size=_bs, shuffle=True,
                 )
                 def _check_loss(m):
-                    return self._eval_loss(m, X_tensor[val_idx], y_tensor[val_idx], self.loss_func)
+                    return self._eval_loss(m, X_tensor[val_idx], y_tensor[val_idx], self.loss_func, weight_tensor[val_idx] if weight_tensor is not None else None)
                 #/def _check_loss
             else:
                 warm_loader = DataLoader(
@@ -571,7 +621,7 @@ class PRISMPredictionModel:
                     batch_size=_bs, shuffle=True,
                 )
                 def _check_loss(m):
-                    return self._eval_loss(m, X_tensor, y_tensor, self.loss_func)
+                    return self._eval_loss(m, X_tensor, y_tensor, self.loss_func, weight_tensor)
                 #/def _check_loss
             #/if self.warmup_val_frac > 0 and self.warmup_patience > 0
 
@@ -582,7 +632,7 @@ class PRISMPredictionModel:
             self.model.train()
             for Zb, yb in _prism_cycle(warm_loader):
                 warmup_opt.zero_grad()
-                self.loss_func(self.model(Zb), yb).backward()
+                _weighted_loss(self.loss_func, self.model(Zb), yb, None).backward()
                 warmup_opt.step()
                 warmup_steps += 1
 
@@ -608,7 +658,7 @@ class PRISMPredictionModel:
             #/for Zb, yb in _prism_cycle(warm_loader)
 
             if self.verbose:
-                tr_loss = self._eval_loss(self.model, X_tensor, y_tensor, self.loss_func)
+                tr_loss = self._eval_loss(self.model, X_tensor, y_tensor, self.loss_func, weight_tensor)
                 vl_loss = _check_loss(self.model)
                 status  = 'converged' if patience_cnt >= self.warmup_patience else 'max steps'
                 print(f"  warm-up: {warmup_steps} steps [{status}]"
@@ -626,10 +676,11 @@ class PRISMPredictionModel:
                     perm = torch.randperm(n, device=self.device)
                     for start in range(0, n, _bs):
                         idx  = perm[start : start + _bs]
-                        loss = self.loss_func(self.model(X_tensor[idx]), y_tensor[idx])
+                        w_idx = weight_tensor[idx] if weight_tensor is not None else None
+                        loss = _weighted_loss(self.loss_func, self.model(X_tensor[idx]), y_tensor[idx], w_idx)
                         optimizer.zero_grad(); loss.backward(); optimizer.step()
                 else:
-                    loss = self.loss_func(self.model(X_tensor), y_tensor)
+                    loss = _weighted_loss(self.loss_func, self.model(X_tensor), y_tensor, weight_tensor)
                     optimizer.zero_grad(); loss.backward(); optimizer.step()
             #/for
 
@@ -664,12 +715,13 @@ class PRISMPredictionModel:
                         perm = torch.randperm(n, device=self.device)
                         for start in range(0, n, _bs):
                             idx  = perm[start : start + _bs]
+                            w_idx = weight_tensor[idx] if weight_tensor is not None else None
                             pred = self.model(X_tensor[idx])
-                            loss = self.loss_func(pred, y_tensor[idx]) + self.model.group_regularization(lb, a_b, groups)
+                            loss = _weighted_loss(self.loss_func, pred, y_tensor[idx], w_idx) + self.model.group_regularization(lb, a_b, groups)
                             optimizer.zero_grad(); loss.backward(); optimizer.step()
                     else:
                         pred = self.model(X_tensor)
-                        loss = self.loss_func(pred, y_tensor) + self.model.group_regularization(lb, a_b, groups)
+                        loss = _weighted_loss(self.loss_func, pred, y_tensor, weight_tensor) + self.model.group_regularization(lb, a_b, groups)
                         optimizer.zero_grad(); loss.backward(); optimizer.step()
                     #
                     pbar.update(1)
@@ -806,10 +858,11 @@ class PRISMPredictionModel:
         X_t: torch.Tensor,
         y_t: torch.Tensor,
         loss_fn: nn.Module,
+        weight_t: torch.Tensor | None = None,
     ) -> float:
         model.eval()
         with torch.no_grad():
-            return loss_fn(model(X_t), y_t).item()
+            return _weighted_loss(loss_fn, model(X_t), y_t, weight_t).item()
         #
     #/def _eval_loss
 #/class PRISMPredictionModel

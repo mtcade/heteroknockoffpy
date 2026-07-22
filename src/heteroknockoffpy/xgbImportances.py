@@ -97,6 +97,7 @@ def _fit_model(
     verbose: int,
     model_kwargs: dict | None = None,
     rng: np.random.Generator | None = None,
+    weight: np.ndarray | None = None,
     **fit_kwargs,
     ) -> tuple[
         xgboost.XGBRegressor | xgboost.XGBClassifier,
@@ -104,6 +105,11 @@ def _fit_model(
         pd.DataFrame,
         OutcomeDescriptor,
     ]:
+    """
+    :param weight: Optional length-n sample weight, forwarded to
+        XGBRegressor/XGBClassifier.fit(sample_weight=weight). None (default)
+        fits unweighted, xgboost's own default.
+    """
     X = _resolve_df( X )
     Xk = _resolve_df( Xk )
     y = _resolve_y( y )
@@ -129,6 +135,8 @@ def _fit_model(
         print( "  outcome_type={}".format( outcomeDescriptor.outcome_type ) )
     #
 
+    if weight is not None:
+        fit_kwargs = dict( fit_kwargs, sample_weight=weight )
     model.fit( X_all_pd, y_fit, **fit_kwargs )
 
     return model, X_all, X_all_pd, outcomeDescriptor
@@ -144,6 +152,7 @@ def score_importances(
     verbose: int = 0,
     model_kwargs: dict | None = None,
     rng: np.random.Generator | None = None,
+    weight: np.ndarray | None = None,
     **fit_kwargs,
     ) -> np.ndarray:
     """
@@ -156,10 +165,12 @@ def score_importances(
         :param rng: If given, seeds the XGBoost fit (random_state=rng) for
             reproducibility -- xgboost's sklearn API accepts a np.random.Generator
             directly. Unseeded (xgboost's own default) if omitted.
+        :param weight: Optional length-n sample weight. None (default) fits
+            unweighted, xgboost's own default.
         :param fit_kwargs: Forwarded to XGBRegressor/XGBClassifier.fit (e.g.
-            sample_weight, eval_set, early_stopping_rounds).
+            eval_set, early_stopping_rounds).
     """
-    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, rng=rng, **fit_kwargs )
+    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, rng=rng, weight=weight, **fit_kwargs )
 
     score_dict: dict[ str, float ] = model.get_booster().get_score( importance_type = importance_type )
 
@@ -207,6 +218,7 @@ def prism_importances(
     verbose: int = 0,
     model_kwargs: dict | None = None,
     rng: np.random.Generator | None = None,
+    weight: np.ndarray | None = None,
     **fit_kwargs,
     ) -> np.ndarray:
     """
@@ -226,9 +238,11 @@ def prism_importances(
         :param rng: If given, seeds the XGBoost fit (random_state=rng) for
             reproducibility -- xgboost's sklearn API accepts a np.random.Generator
             directly. Unseeded (xgboost's own default) if omitted.
+        :param weight: Optional length-n sample weight. None (default) fits
+            unweighted, xgboost's own default.
         :param fit_kwargs: Forwarded to XGBRegressor/XGBClassifier.fit.
     """
-    model, X_all, X_all_pd, outcomeDescriptor = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, rng=rng, **fit_kwargs )
+    model, X_all, X_all_pd, outcomeDescriptor = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, rng=rng, weight=weight, **fit_kwargs )
     ot = outcomeDescriptor.outcome_type
 
     n: int = X_all_pd.shape[0]
@@ -340,6 +354,7 @@ def shap_importances(
     verbose: int = 0,
     model_kwargs: dict | None = None,
     rng: np.random.Generator | None = None,
+    weight: np.ndarray | None = None,
     **fit_kwargs,
     ) -> np.ndarray:
     """
@@ -352,11 +367,13 @@ def shap_importances(
         :param rng: If given, seeds the XGBoost fit (random_state=rng) for
             reproducibility -- xgboost's sklearn API accepts a np.random.Generator
             directly. Unseeded (xgboost's own default) if omitted.
+        :param weight: Optional length-n sample weight. None (default) fits
+            unweighted, xgboost's own default.
         :param fit_kwargs: Forwarded to XGBRegressor/XGBClassifier.fit.
     """
     import shap
 
-    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, rng=rng, **fit_kwargs )
+    model, X_all, X_all_pd, _ = _fit_model( X, Xk, y, outcome_type, verbose, model_kwargs=model_kwargs, rng=rng, weight=weight, **fit_kwargs )
 
     explainer = shap.TreeExplainer( model )
     shap_values = explainer.shap_values( X_all_pd )

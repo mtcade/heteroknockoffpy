@@ -44,7 +44,13 @@ class PoissonLassoCV:
         self: Self,
         X: np.ndarray,
         y: np.ndarray,
+        weight: np.ndarray | None = None,
     ) -> 'PoissonLassoCV':
+        """
+        :param weight: Optional length-n sample weight, forwarded to
+            sm.GLM(..., var_weights=weight) for both the per-fold CV fits
+            and the final fit. None (default) fits unweighted.
+        """
         X_sm: np.ndarray = sm.add_constant( X ) if self.fit_intercept else X
         kf: KFold = KFold( n_splits = self.n_splits, shuffle = True )
 
@@ -61,6 +67,7 @@ class PoissonLassoCV:
                     y[ train_idx ],
                     X_sm[ train_idx ],
                     family = sm.families.Poisson(),
+                    var_weights = weight[ train_idx ] if weight is not None else None,
                 ).fit_regularized(
                     method = 'elastic_net',
                     alpha = alpha,
@@ -96,6 +103,7 @@ class PoissonLassoCV:
             y,
             X_sm,
             family = sm.families.Poisson(),
+            var_weights = weight if weight is not None else None,
         ).fit_regularized(
             method = 'elastic_net',
             alpha = best_alpha,

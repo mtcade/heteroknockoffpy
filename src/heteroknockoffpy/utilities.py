@@ -669,6 +669,7 @@ def get_linear_probabilities_for_column(
     logit: bool = True,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -677,6 +678,9 @@ def get_linear_probabilities_for_column(
         Always gives all probabilities, not dropping any
         
         :param kwargs: Passed to sklearn.linear_model.LogisticRegression
+        :param weight: Optional length-n sample weight, forwarded to
+            LogisticRegression.fit(sample_weight=weight). None (default)
+            fits unweighted.
     """
     from sklearn.linear_model import LogisticRegression
     
@@ -693,7 +697,7 @@ def get_linear_probabilities_for_column(
         } | kwargs
     )
     
-    model.fit( _X, _y )
+    model.fit( _X, _y, sample_weight = weight )
     
     if logit:
         return model.predict_log_proba( _X )
@@ -708,12 +712,15 @@ def get_ohe_linear_probabilities_np(
     drop_first: bool = True,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
         Use sklearn logistic regression to convert categorical columns to probabilities, or log probabilities if `logit`, in which case we take the logs of each, subtracting the first column if `drop_first`
         
         :param kwargs: Passed  to sklearn.linear_model.LogisticRegression
+        :param weight: Optional length-n sample weight, forwarded to each
+            per-column LogisticRegression fit. None (default) fits unweighted.
     """
     columns_dict: dict[
         str, # categorical column in X
@@ -723,6 +730,7 @@ def get_ohe_linear_probabilities_np(
             X = X,
             col = col,
             logit = logit,
+            weight = weight,
             **kwargs
         ) for col, dtype in X.schema.items()\
             if dtype == pl.Categorical

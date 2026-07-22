@@ -96,12 +96,34 @@ def _schema_of(x: DataFrameLike) -> pl.Schema:
         return x.schema
     return pl.scan_parquet(os.fspath(x)).schema
 
+def _with_case_weights( kwargs: dict, weight: np.ndarray | None ) -> dict:
+    """
+    Inject ranger::ranger's `case.weights` into a kwargs dict headed for one
+    of the `{k.replace('_','.'): v for k, v in kwargs.items()}` R-call sites
+    below, if `weight` is given. Pre-converts to an R FloatVector (rather
+    than leaving it a raw numpy array) since these STAP call sites run
+    outside a `numpy2ri` conversion context -- same reasoning as `y_r`/
+    `mu_r` elsewhere in this module.
+
+    ranger's case.weights are resampling-probability weights (they bias
+    which rows are drawn into each tree's bootstrap sample), not a direct
+    loss multiplier the way xgboost/sklearn sample_weight is -- different
+    mechanism, same intent.
+    """
+    if weight is None:
+        return kwargs
+    kwargs = dict( kwargs )
+    kwargs[ 'case_weights' ] = ro.FloatVector( np.asarray( weight, dtype=float ).tolist() )
+    return kwargs
+#/def _with_case_weights
+
 def get_ohe_forest_probabilities_np(
     X: DataFrameLike,
     logit: bool = True,
     drop_first: bool = True,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -109,11 +131,16 @@ def get_ohe_forest_probabilities_np(
 
         The column loop runs entirely in R (forest.ohe_probabilities), loaded once
         per call via rpy2.robjects.packages.STAP.
+
+        :param weight: Optional length-n sample weight, forwarded as ranger's
+            case.weights (see `_with_case_weights`). None (default) fits
+            unweighted.
     """
     if not isinstance(X, pl.DataFrame):
         raise NotImplementedError("Path input not supported for get_ohe_forest_probabilities_np; X must be a pl.DataFrame")
     # -- Load R script via STAP
     _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("forest.ohe_probabilities.R").read_text()
+    kwargs = _with_case_weights( kwargs, weight )
 
     with ro.default_converter.context():
         _ohe_probs = rpackages.STAP( _r_code, "ohe_probs" )
@@ -191,6 +218,7 @@ def get_forest_conditional_expectations(
     X: DataFrameLike,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs
     ) -> pl.DataFrame:
     """
@@ -200,10 +228,14 @@ def get_forest_conditional_expectations(
         per call via rpy2.robjects.packages.STAP.
 
         :param kwargs: Passed to r ranger::ranger
+        :param weight: Optional length-n sample weight, forwarded as ranger's
+            case.weights (see `_with_case_weights`). None (default) fits
+            unweighted.
         :returns: DataFrame with non-categorical columns of X replaced by their conditional expectations
     """
     # -- Load R script via STAP
     _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("forest.conditional_expectations.R").read_text()
+    kwargs = _with_case_weights( kwargs, weight )
 
     with ro.default_converter.context():
         _cond_exp = rpackages.STAP( _r_code, "cond_exp" )
@@ -251,6 +283,7 @@ def get_knockoffs_with_Xk_numeric(
     rng: np.random.Generator,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> pl.DataFrame:
     """
@@ -261,6 +294,9 @@ def get_knockoffs_with_Xk_numeric(
         per call via rpy2.robjects.packages.STAP.
 
         :param kwargs: Passed to r ranger::ranger
+        :param weight: Optional length-n sample weight, forwarded as ranger's
+            case.weights (see `_with_case_weights`). None (default) fits
+            unweighted.
     """
     numeric_columns: tuple[ str,... ] = tuple(
         col for col, dtype in _schema_of( X ).items() if dtype != pl.Categorical
@@ -269,6 +305,7 @@ def get_knockoffs_with_Xk_numeric(
 
     # -- Load R script via STAP
     _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("scip.knockoffs.R").read_text()
+    kwargs = _with_case_weights( kwargs, weight )
 
     # -- Draw one integer seed from Python's Generator to seed R's RNG
     _seed: int = int( rng.integers( 1, 2**31 - 1 ) )
@@ -318,6 +355,7 @@ def get_knockoffs_second_order_np(
     verbose: int = 0,
     verbose_prefix: str = '',
     rng: np.random.Generator | None = None,
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -328,25 +366,62 @@ def get_knockoffs_second_order_np(
             RNG state -- unseeded, that state simply carries on from wherever the
             embedded R session's previous call left it, so repeated calls with
             identical X are not reproducible without this.
+        :param weight: Optional length-n sample weight. create.second_order
+            itself has no weight support (it's a thin wrapper: unweighted
+            mu=colMeans(X)/Sigma=cov(X) or corpcor::cov.shrink(X), then
+            create.gaussian(X, mu, Sigma, method)) -- confirmed by reading
+            the installed knockoff package's R source. So when weight is
+            given, this bypasses create.second_order entirely: compute a
+            weighted mu/Sigma ourselves (np.average/np.cov(aweights=weight))
+            and call create.gaussian(X, mu, Sigma, method) directly. NOTE:
+            corpcor::cov.shrink has no weighted variant, so `shrink=True`
+            is not honored in the weighted path -- if the weighted Sigma
+            isn't positive-definite, a small ridge (diagonal jitter) is
+            added instead of real shrinkage. None (default) is the original
+            unweighted create.second_order call, unaffected by any of this.
 
-        :returns: Knockoffs using `rKnockoff.create_second_order`, thus with continuous categorical values.
+        :returns: Knockoffs using `rKnockoff.create_second_order`/
+            `create_gaussian`, thus with continuous categorical values.
     """
 
     Xk: np.ndarray
     shrink: bool = kwargs.pop( 'shrink', True )
+    method: str = kwargs.pop( 'method', 'asdp' )
     if rng is not None:
         _seed: int = int( rng.integers( 1, 2**31 - 1 ) )
         ro.r( 'set.seed' )( _seed )
     #
-    with (
-        ro.default_converter + numpy2ri.converter
-    ).context():
-        Xk = rKnockoff.create_second_order(
-            X,
-            shrink = shrink,
-            **kwargs
-        )
-    #/with ( ro.default_converter + numpy2ri.converter )
+
+    if weight is None:
+        with (
+            ro.default_converter + numpy2ri.converter
+        ).context():
+            Xk = rKnockoff.create_second_order(
+                X,
+                shrink = shrink,
+                method = method,
+                **kwargs
+            )
+        #/with ( ro.default_converter + numpy2ri.converter )
+    else:
+        w = np.asarray( weight, dtype=float )
+        mu: np.ndarray = np.average( X, axis=0, weights=w )
+        Sigma: np.ndarray = np.cov( X, rowvar=False, aweights=w )
+        Sigma = np.atleast_2d( Sigma )
+        min_eig = np.linalg.eigvalsh( Sigma ).min()
+        if min_eig <= 0:
+            Sigma = Sigma + np.eye( Sigma.shape[0] ) * ( abs( min_eig ) + 1e-6 )
+        #
+        with (
+            ro.default_converter + numpy2ri.converter
+        ).context():
+            Xk = rKnockoff.create_gaussian(
+                X, mu, Sigma,
+                method = method,
+                **kwargs
+            )
+        #/with ( ro.default_converter + numpy2ri.converter )
+    #/if weight is None/else
 
     return Xk
 #/def get_knockoffs_second_order_np
@@ -357,6 +432,7 @@ def get_knockoffs_SCIP(
     residuals_method: Literal['normal','permute',] = 'normal',
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> pl.DataFrame:
     """
@@ -368,9 +444,13 @@ def get_knockoffs_SCIP(
 
         :param residuals_method: "normal" or "permute" — how to resample numeric residuals
         :param kwargs: Passed to r ranger::ranger
+        :param weight: Optional length-n sample weight, forwarded as ranger's
+            case.weights (see `_with_case_weights`). None (default) fits
+            unweighted.
     """
     # -- Load R script via STAP
     _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("scip.knockoffs.R").read_text()
+    kwargs = _with_case_weights( kwargs, weight )
 
     # -- Draw one integer seed from Python's Generator to seed R's RNG
     _seed: int = int( rng.integers( 1, 2**31 - 1 ) )
@@ -415,10 +495,14 @@ def rangerGiniImportances(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
         :param kwargs: Passed to ranger::ranger via stat_forest_hetero_gini
+        :param weight: Optional length-n sample weight, forwarded as ranger's
+            case.weights (see `_with_case_weights`). None (default) fits
+            unweighted.
     """
     if not isinstance(X, pl.DataFrame):
         raise NotImplementedError("Path input not supported for rangerGiniImportances; X must be a pl.DataFrame")
@@ -435,6 +519,7 @@ def rangerGiniImportances(
     #
 
     _r_code: str = _pkg_files("heteroknockoffpy.scripts").joinpath("stat.forest.hetero_gini.R").read_text()
+    kwargs = _with_case_weights( kwargs, weight )
 
     if verbose > 0:
         kwargs = dict( kwargs, verbose = True )
@@ -493,6 +578,7 @@ def rangerPrismImportances(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -507,6 +593,9 @@ def rangerPrismImportances(
         Categorical outcome: Mahalanobis norm of log-probability contrasts.
 
         :param kwargs: Passed to ranger::ranger via stat_forest_prism_*
+        :param weight: Optional length-n sample weight, forwarded as ranger's
+            case.weights (see `_with_case_weights`). None (default) fits
+            unweighted.
     """
     if not isinstance( X, pl.DataFrame ):
         raise NotImplementedError( "Path input not supported for rangerPrismImportances; X must be a pl.DataFrame" )
@@ -537,6 +626,7 @@ def rangerPrismImportances(
     )
 
     _r_code: str = _pkg_files( "heteroknockoffpy.scripts" ).joinpath( _script ).read_text()
+    kwargs = _with_case_weights( kwargs, weight )
 
     importances: np.ndarray
     with ( _r_warnings_to_stdout() if verbose > 0 else contextlib.nullcontext() ):

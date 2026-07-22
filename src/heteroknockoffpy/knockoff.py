@@ -24,6 +24,7 @@ def get_withCallable(
     conditional_expectations: pl.DataFrame | None = None,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -57,6 +58,10 @@ def get_withCallable(
             `knockoffCallable`'s own call, e.g. `second_order`'s `shrink`); also
             unused for the `'forest'`/`'linear'`/`'ohe'` branch. Reserved for
             future per-categorical_method tuning.
+        :param weight: Optional length-n sample weight, forwarded to whichever
+            categorical_method branch actually fits something ('forest'/
+            'linear'/'ranger_scip'/'xgb_scip'); unused for 'ohe' (no fit on
+            that path). None (default) fits unweighted.
         :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
     """
     X = _resolve_df(X)
@@ -73,6 +78,7 @@ def get_withCallable(
                 X = X,
                 verbose = verbose,
                 verbose_prefix = verbose_prefix,
+                weight = weight,
                 #**kwargs,
             )
         #
@@ -91,6 +97,7 @@ def get_withCallable(
             rng = rng,
             verbose = verbose,
             verbose_prefix = verbose_prefix,
+            weight = weight,
             #**kwargs,
         )
     #/if categorical_method in ( 'ranger_scip', 'xgb_scip' )
@@ -111,6 +118,7 @@ def get_withCallable(
                 drop_first = True,
                 verbose = verbose,
                 verbose_prefix = verbose_prefix,
+                weight = weight,
                 #**kwargs,
             )
         #
@@ -124,6 +132,7 @@ def get_withCallable(
                 drop_first = True,
                 verbose = verbose,
                 verbose_prefix = verbose_prefix,
+                weight = weight,
                 #**kwargs,
             )
         #
@@ -165,6 +174,7 @@ def get_second_order(
     conditional_expectations: pl.DataFrame | None = None,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> pl.DataFrame:
     """
@@ -210,6 +220,7 @@ def get_second_order(
             verbose = verbose,
             verbose_prefix = verbose_prefix,
             rng = rng,
+            weight = weight,
             **kwargs,
         )
     #/def knockoffCallable
@@ -222,6 +233,7 @@ def get_second_order(
         conditional_expectations = conditional_expectations,
         verbose = verbose,
         verbose_prefix = verbose_prefix,
+        weight = weight,
         **kwargs,
     )
 #/def get_second_order
@@ -233,6 +245,7 @@ def get_torchGAN(
     conditional_expectations: pl.DataFrame | None = None,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> pl.DataFrame:
     """
@@ -289,6 +302,15 @@ def get_torchGAN(
                 discriminator + WGAN-discriminator + MINE critics share a single
                 Adam optimizer instead of three separate ones (fewer optimizer
                 objects, coupled step sizes across the three critic losses).
+        :param weight: Optional length-n sample weight. NOT used by the GAN
+            training itself -- TorchGAN is unsupervised (no y-target), so
+            there's no loss to multiply a per-row weight against; accepted
+            here only for signature consistency with the other knockoff
+            methods and documented as a no-op (per design decision -- a real
+            weighted-training scheme would mean weighted minibatch sampling,
+            a materially different mechanism, and was decided out of scope).
+            Still forwarded to `categorical_method`'s own fit (which DOES use
+            it, when 'forest'/'linear'/'ranger_scip'/'xgb_scip').
         :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
     """
     from . import _processIsolation
@@ -317,6 +339,7 @@ def get_torchGAN(
         conditional_expectations = conditional_expectations,
         verbose = verbose,
         verbose_prefix = verbose_prefix,
+        weight = weight,
         **kwargs,
     )
 #/def get_torchGAN
@@ -327,6 +350,7 @@ def get_rangerSCIP(
     residuals_method: Literal['normal','permute',] = 'normal',
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> pl.DataFrame:
     """
@@ -374,6 +398,7 @@ def get_rangerSCIP(
         residuals_method = residuals_method,
         verbose = verbose,
         verbose_prefix = verbose_prefix,
+        weight = weight,
         **kwargs,
     )
 #/def get_rangerSCIP
@@ -384,6 +409,7 @@ def get_xgbSCIP(
     residuals_method: Literal['normal','permute',] = 'normal',
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> pl.DataFrame:
     """
@@ -418,6 +444,7 @@ def get_xgbSCIP(
         residuals_method = residuals_method,
         verbose = verbose,
         verbose_prefix = verbose_prefix,
+        weight = weight,
         **kwargs,
     )
 #/def get_xgbSCIP
@@ -434,12 +461,20 @@ def get_knockoffs(
     conditional_expectations: pl.DataFrame | None = None,
     verbose: int = 0,
     verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> pl.DataFrame | tuple[ pl.DataFrame, pl.DataFrame ]:
     """
         Interface to name the knockoff method by string
 
         :param conditional_expectations: Necessary if kwargs['categorical_method'] in ("ranger_scip", "xgb_scip")
+        :param weight: Optional length-n sample weight, forwarded to whichever
+            method is selected. None (default) fits unweighted. See each
+            get_*'s own docstring for exactly how weight is used
+            (second_order: real weighted mean/covariance; torch_GAN:
+            documented no-op for the GAN itself, still used by
+            categorical_method's own fit; ranger_SCIP/xgb_SCIP: native
+            case.weights/sample_weight).
     """
     numeric_columns: tuple[ str,... ] = tuple(
         col for col, dtype in X.schema.items() if dtype != pl.Categorical
@@ -476,6 +511,7 @@ def get_knockoffs(
             conditional_expectations = conditional_expectations,
             verbose = verbose,
             verbose_prefix = verbose_prefix,
+            weight = weight,
             **kwargs,
         )
     #
@@ -494,6 +530,7 @@ def get_knockoffs(
             conditional_expectations = conditional_expectations,
             verbose = verbose,
             verbose_prefix = verbose_prefix,
+            weight = weight,
             **kwargs,
         )
     #
@@ -505,6 +542,7 @@ def get_knockoffs(
             rng = rng,
             verbose = verbose,
             verbose_prefix = verbose_prefix,
+            weight = weight,
             **kwargs,
         )
     #
@@ -516,6 +554,7 @@ def get_knockoffs(
             rng = rng,
             verbose = verbose,
             verbose_prefix = verbose_prefix,
+            weight = weight,
             **kwargs,
         )
     #

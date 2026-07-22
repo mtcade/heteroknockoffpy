@@ -31,6 +31,7 @@ def prismWImportances(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
+    weight: np.ndarray | None = None,
     ) -> np.ndarray:
     """
     PRISM-W importances: average of group-norm snapshots over a lambda regularization path.
@@ -89,9 +90,9 @@ def prismWImportances(
         drop_first = drop_first,
         dense_activation = dense_activation,
         verbose = verbose,
+        weight = weight,
     )
 #/def prismWImportances
-
 
 def prismWImportancesPerOHE(
     X: DataFrameLike,
@@ -112,6 +113,7 @@ def prismWImportancesPerOHE(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
+    weight: np.ndarray | None = None,
     ) -> np.ndarray:
     """
     PRISM-W importances, but every OHE dummy column is treated as its own independent
@@ -177,6 +179,7 @@ def prismWImportancesPerOHE(
         drop_first = drop_first,
         dense_activation = dense_activation,
         verbose = verbose,
+        weight = weight,
     )
 #/def prismWImportancesPerOHE
 
@@ -204,6 +207,7 @@ def prismGImportances(
     dense_activation: str = 'relu',
     verbose: int = 0,
     bandwidth_exponent: float = 0.2,
+    weight: np.ndarray | None = None,
     ) -> np.ndarray:
     """
     PRISM-G importances: average of PRISM local-gradient snapshots over a lambda path.
@@ -272,6 +276,7 @@ def prismGImportances(
         dense_activation = dense_activation,
         verbose = verbose,
         bandwidth_exponent = bandwidth_exponent,
+        weight = weight,
     )
 #/def prismGImportances
 
@@ -299,6 +304,7 @@ def prismGWImportances(
     dense_activation: str = 'relu',
     verbose: int = 0,
     bandwidth_exponent: float = 0.2,
+    weight: np.ndarray | None = None,
     ) -> tuple[ np.ndarray, np.ndarray ]:
     """
     PRISM-G and PRISM-W importances from a single training pass.
@@ -368,6 +374,7 @@ def prismGWImportances(
         dense_activation = dense_activation,
         verbose = verbose,
         bandwidth_exponent = bandwidth_exponent,
+        weight = weight,
     )
 #/def prismGWImportances
 
@@ -393,6 +400,7 @@ def prismGLocalGradients(
     drop_first:        bool = True,
     dense_activation:  str = 'relu',
     verbose:           int = 0,
+    weight:            np.ndarray | None = None,
     ) -> np.ndarray:
     """
     Train a PRISM-G network on (X, Xk, y) and return the per-sample local gradient
@@ -459,6 +467,7 @@ def prismGLocalGradients(
         drop_first = drop_first,
         dense_activation = dense_activation,
         verbose = verbose,
+        weight = weight,
     )
 #/def prismGLocalGradients
 
@@ -469,6 +478,7 @@ def rangerGiniImportances(
     y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -488,6 +498,9 @@ def rangerGiniImportances(
                 `max_depth` (int), `sample_fraction` (float), `num_threads` (int).
               - `respect_unordered_factors` (str, e.g. `'partition'`): how ranger
                 splits unordered categorical predictors.
+        :param weight: Optional length-n sample weight, forwarded to
+            ranger::ranger's case.weights (resampling-probability weighting,
+            not a loss multiplier). None (default) fits unweighted.
         :returns: Array of shape (2*p,) — first p entries for X, last p for Xk.
     """
     from . import _processIsolation
@@ -499,6 +512,7 @@ def rangerGiniImportances(
         y = y,
         outcome_type = outcome_type,
         verbose = verbose,
+        weight = weight,
         **kwargs,
     )
 #/def rangerGiniImportances
@@ -510,6 +524,7 @@ def rangerPrismImportances(
     y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -533,6 +548,9 @@ def rangerPrismImportances(
             `bandwidth`/`bandwidth_exponent`/`exponent` accepted by the R script
             itself (mirroring `xgbPrismImportances`'s parameters of the same
             name, forwarded here as plain kwargs rather than named parameters).
+        :param weight: Optional length-n sample weight, forwarded to
+            ranger::ranger's case.weights (resampling-probability weighting,
+            not a loss multiplier). None (default) fits unweighted.
         :returns: Array of shape (2*p,) — first p entries for X, last p for Xk.
     """
     from . import _processIsolation
@@ -544,6 +562,7 @@ def rangerPrismImportances(
         y = y,
         outcome_type = outcome_type,
         verbose = verbose,
+        weight = weight,
         **kwargs,
     )
 #/def rangerPrismImportances
@@ -557,6 +576,7 @@ def xgbImportances(
     importance_type: Literal[ 'weight','gain','cover','total_gain','total_cover'] = 'gain',
     verbose: int = 0,
     rng: np.random.Generator | None = None,
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -585,6 +605,8 @@ def xgbImportances(
             (`enable_categorical=True` + `tree_method='hist'`/`'approx'`).
         :param rng: If given, seeds the XGBoost fit (random_state=rng) for
             reproducibility. Unseeded if omitted.
+        :param weight: Optional length-n sample weight. None (default) fits
+            unweighted, xgboost's own default.
         :returns: Array of shape (2*p,) — first p entries for X, last p for Xk.
     """
     from . import _processIsolation
@@ -598,6 +620,7 @@ def xgbImportances(
         importance_type = importance_type,
         verbose = verbose,
         rng = rng,
+        weight = weight,
         **kwargs,
     )
 #/def xgbImportances
@@ -609,6 +632,7 @@ def xgbPrismImportances(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
     rng: np.random.Generator | None = None,
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -635,6 +659,8 @@ def xgbPrismImportances(
             for the full `model_kwargs` reference.
         :param rng: If given, seeds the XGBoost fit (random_state=rng) for
             reproducibility. Unseeded if omitted.
+        :param weight: Optional length-n sample weight. None (default) fits
+            unweighted, xgboost's own default.
         :returns: Array of shape (2*p,) — first p entries for X, last p for Xk.
     """
     from . import _processIsolation
@@ -647,6 +673,7 @@ def xgbPrismImportances(
         outcome_type = outcome_type,
         verbose = verbose,
         rng = rng,
+        weight = weight,
         **kwargs,
     )
 #/def xgbPrismImportances
@@ -658,6 +685,7 @@ def xgbShapImportances(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     verbose: int = 0,
     rng: np.random.Generator | None = None,
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -679,6 +707,8 @@ def xgbShapImportances(
             the full parameter reference.
         :param rng: If given, seeds the XGBoost fit (random_state=rng) for
             reproducibility. Unseeded if omitted.
+        :param weight: Optional length-n sample weight. None (default) fits
+            unweighted, xgboost's own default.
         :returns: Array of shape (2*p,) — first p entries for X, last p for Xk.
     """
     from . import _processIsolation
@@ -691,6 +721,7 @@ def xgbShapImportances(
         outcome_type = outcome_type,
         verbose = verbose,
         rng = rng,
+        weight = weight,
         **kwargs,
     )
 #/def xgbShapImportances
@@ -718,6 +749,7 @@ def lassoImportances(
     fit_intercept: bool = True,
     exponent: float = 1.0,
     verbose: int = 0,
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -833,6 +865,7 @@ def lassoImportances(
         lassoModel.fit(
             X = X_ohe,
             y = y,
+            sample_weight = weight,
         )
 
         # Grab coefficients, and get importances
@@ -883,6 +916,7 @@ def lassoImportances(
         glmModel.fit(
             X = X_ohe,
             y = y,
+            weight = weight,
         )
 
         lasso_coefficients: np.ndarray = glmModel.coef_
@@ -909,6 +943,7 @@ def lassoImportances(
         logisticModel.fit(
             X = X_ohe,
             y = y.to_numpy().ravel(),
+            sample_weight = weight,
         )
 
         # coef_ shape: (n_classes, n_features) or (1, n_features) for binary
@@ -971,6 +1006,7 @@ def ridgeImportances(
     fit_intercept: bool = True,
     exponent: float = 1.0,
     verbose: int = 0,
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -1070,7 +1106,7 @@ def ridgeImportances(
             fit_intercept = fit_intercept,
             cv = n_splits,
         )
-        ridgeModel.fit( X = X_ohe, y = y )
+        ridgeModel.fit( X = X_ohe, y = y, sample_weight = weight )
         ridge_coefficients = ridgeModel.coef_.reshape( -1 )
 
     elif outcomeDescriptor.outcome_type == 'count':
@@ -1102,7 +1138,7 @@ def ridgeImportances(
         import warnings
         with warnings.catch_warnings():
             warnings.filterwarnings( 'ignore', category = RuntimeWarning )
-            poissonModel.fit( X = X_ohe_scaled, y = y )
+            poissonModel.fit( X = X_ohe_scaled, y = y, sample_weight = weight )
         #
 
         ridge_coefficients = poissonModel.best_estimator_.coef_
@@ -1132,6 +1168,7 @@ def ridgeImportances(
         logisticModel.fit(
             X = X_ohe,
             y = y.to_numpy().ravel(),
+            sample_weight = weight,
         )
 
         ridge_coefficients = logisticModel.coef_
@@ -1184,6 +1221,7 @@ def elasticImportances(
     fit_intercept: bool = True,
     exponent: float = 1.0,
     verbose: int = 0,
+    weight: np.ndarray | None = None,
     **kwargs,
     ) -> np.ndarray:
     """
@@ -1231,6 +1269,7 @@ def elasticImportances(
             fit_intercept = fit_intercept,
             exponent = exponent,
             verbose = verbose,
+            weight = weight,
             **kwargs,
         )
     if l1_ratio == 0.0:
@@ -1240,6 +1279,7 @@ def elasticImportances(
             fit_intercept = fit_intercept,
             exponent = exponent,
             verbose = verbose,
+            weight = weight,
             **kwargs,
         )
 
@@ -1305,7 +1345,7 @@ def elasticImportances(
             fit_intercept = fit_intercept,
             cv = n_splits,
         )
-        elasticModel.fit( X = X_ohe, y = y )
+        elasticModel.fit( X = X_ohe, y = y, sample_weight = weight )
         elastic_coefficients = elasticModel.coef_.reshape( -1 )
 
     elif outcomeDescriptor.outcome_type == 'count':
@@ -1326,7 +1366,7 @@ def elasticImportances(
             max_iter = max_iter,
             L1_wt = l1_ratio,
         )
-        glmModel.fit( X = X_ohe, y = y )
+        glmModel.fit( X = X_ohe, y = y, weight = weight )
         elastic_coefficients = glmModel.coef_
 
     elif outcomeDescriptor.outcome_type == 'categorical':
@@ -1350,6 +1390,7 @@ def elasticImportances(
         logisticModel.fit(
             X = X_ohe,
             y = y.to_numpy().ravel(),
+            sample_weight = weight,
         )
 
         elastic_coefficients = logisticModel.coef_
