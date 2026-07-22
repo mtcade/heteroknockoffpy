@@ -39,6 +39,15 @@ and `heteroknockoffpy.xgbImportances` directly yourself, this isolation doesn't 
 
 ## Knockoffs
 
+Every knockoff function shares this common core of inputs:
+
+- **`X`** — Original data (numeric + `pl.Categorical` columns).
+- **`rng`** — `np.random.Generator` seeding the method's randomness (R/xgboost/OHE-sampling downstream, and, for `second_order`, R's own RNG).
+- **`categorical_method`** (`get_second_order`/`get_torchGAN` only) — How categorical columns are encoded before knockoffs are generated: `'forest'`/`'linear'`/`'ohe'`/`'ranger_scip'`/`'xgb_scip'`. See the `categorical_method` table below. Not a parameter of `get_rangerSCIP`/`get_xgbSCIP`, which handle categoricals natively.
+- **`conditional_expectations`** — `pl.DataFrame` of `E[X_j | X_{-j}]` per numeric column; only relevant when `categorical_method` is `'ranger_scip'`/`'xgb_scip'`. Computed internally if omitted. See `conditional_expectations` below.
+- **`verbose`** / **`verbose_prefix`** — Verbosity level (`0` = silent) and a string prefix for any verbose print output, useful when nesting calls inside a higher-level loop.
+- **`weight`** — Optional length-`n` sample weight. `None` (default) fits unweighted. Forwarded to whichever step actually fits something: `'second_order'` uses it as a real weighted mean/covariance; `'forest'`/`'linear'`/`'ranger_scip'`/`'xgb_scip'` (as a `categorical_method` or as `method` itself) use it as native `case.weights`/`sample_weight`; `'ohe'` ignores it (no fit on that path); `'torch_GAN'` accepts it only for signature consistency — the GAN itself is unsupervised and does not use it, though it's still passed through to `categorical_method`'s own fit.
+
 ```python
 from heteroknockoffpy import knockoff
 import numpy as np
@@ -103,9 +112,15 @@ If `conditional_expectations=None` (the default) and `categorical_method='ranger
 
 ## Importances
 
-All importance functions return a `np.ndarray` of length `2p` — scores for `[x_1, …, x_p, x̃_1, …, x̃_p]`. Use `wFromImportances` to convert these to knockoff W-statistics for variable selection.
+Every importance function shares this common core of inputs:
 
-**Note on categorical variables:** the PRISM importance functions (`prismWImportances`, `prismGImportances`, `prismGWImportances`, `prismWImportancesPerOHE`) are not effective at detecting per-category relevance for categorical variables. A categorical variable's contribution enters the model only through a discrete, latent set of one-hot dummy columns, and a sufficiently flexible nonlinear model can route a real effect through many different combinations of those columns' weights — unlike a continuous variable, there's no single identifiable direction for the swap statistic to key on. In practice this means PRISM power/FDR on categorical variables should not be trusted, even when the model appears to fit well; PRISM is best used for continuous (and to a lesser extent, count) variables.
+- **`X`** / **`Xk`** — Original data and its knockoffs (same schema, numeric + `pl.Categorical` columns).
+- **`y`** — Outcome; scalar (continuous/count) or categorical Series/DataFrame.
+- **`outcome_type`** — `'continuous'`/`'count'`/`'categorical'`; inferred from `y` if omitted.
+- **`verbose`** — Verbosity level (`0` = silent).
+- **`weight`** — Optional length-`n` sample weight. `None` (default) fits unweighted. For the PRISM-torch family (`prismWImportances`/`prismGImportances`/`prismGWImportances`/`prismWImportancesPerOHE`), it's a per-sample multiplier on the training loss. For `rangerGiniImportances`/`rangerPrismImportances`, it's forwarded to `ranger::ranger`'s `case.weights` (resampling-probability weighting, not a loss multiplier). For `lassoImportances`/`ridgeImportances`/`elasticImportances`, it's forwarded as each underlying sklearn/statsmodels model's `sample_weight`. For the xgboost-based functions (`xgbImportances`/`xgbPrismImportances`/`xgbShapImportances`), it's xgboost's own native `sample_weight`.
+
+All importance functions return a `np.ndarray` of length `2p` — scores for `[x_1, …, x_p, x̃_1, …, x̃_p]`. Use `wFromImportances` to convert these to knockoff W-statistics for variable selection.
 
 ### PRISM-W — `prismWImportances`
 
