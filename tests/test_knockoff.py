@@ -31,6 +31,16 @@ def test_second_order_linear_mixed_schema_matches():
     assert len(Xk) == len(X)
 
 
+def test_second_order_xgb_categorical_mixed_schema_matches():
+    X, rng = _make_mixed()
+    Xk = knockoff.get_knockoffs(
+        X, method="second_order", rng=rng, categorical_method="xgb",
+        max_depth=3, n_estimators=20,
+    )
+    assert Xk.schema == X.schema
+    assert len(Xk) == len(X)
+
+
 def test_second_order_ohe_numeric_only():
     n = 60
     rng = np.random.default_rng(1)

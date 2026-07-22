@@ -120,7 +120,10 @@ def test_pairwise_prefit_reuses_mlp_and_v_becomes_half():
     v_before = net.v.detach().clone()
 
     prefit = net.build_prefit_module()
-    assert prefit is net.mlp
+    # output_size=1 wraps net.mlp with a trailing squeeze (to match the target
+    # shape _train_one_step trains against) rather than copying it, so net.mlp
+    # itself -- not the wrapper -- is what must be reused by reference.
+    assert prefit[0] is net.mlp
     _train_one_step(prefit, P_OHE)
 
     net.transfer_from_prefit(prefit)

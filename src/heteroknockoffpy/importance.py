@@ -827,7 +827,7 @@ def lassoImportances(
                 { col: col + '~' for col in Xk.columns }
             ),
         ),
-        how = 'horizontal',
+        how = 'horizontal_extend',
     )
 
     oheDict: dict[ str, int | tuple[ int,...] ] = utilities.get_oheDict(
@@ -1066,7 +1066,7 @@ def ridgeImportances(
             X,
             Xk.rename( { col: col + '~' for col in Xk.columns } ),
         ),
-        how = 'horizontal',
+        how = 'horizontal_extend',
     )
 
     oheDict: dict[ str, int | tuple[ int,...] ] = utilities.get_oheDict(
@@ -1307,7 +1307,7 @@ def elasticImportances(
             X,
             Xk.rename( { col: col + '~' for col in Xk.columns } ),
         ),
-        how = 'horizontal',
+        how = 'horizontal_extend',
     )
 
     oheDict: dict[ str, int | tuple[ int,...] ] = utilities.get_oheDict(

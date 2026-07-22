@@ -191,6 +191,101 @@ def _fit_regression_forest(
 #/def _fit_regression_forest
 
 
+def get_ohe_forest_probabilities_np(
+    X: DataFrameLike,
+    logit: bool = True,
+    drop_first: bool = True,
+    verbose: int = 0,
+    verbose_prefix: str = '',
+    rng: np.random.Generator | None = None,
+    weight: np.ndarray | None = None,
+    **kwargs,
+    ) -> np.ndarray:
+    """
+        xgboost analogue of `rbridge.get_ohe_forest_probabilities_np`: fits an
+        `XGBClassifier` (via `_fit_probability_forest`) predicting each
+        categorical column from all *other original* columns of X, and uses
+        the resulting class probabilities (log-probabilities if `logit`) as a
+        soft numeric encoding. Unlike `get_knockoffs_SCIP`'s use of the same
+        helper, this is not sequential/chained -- every column's model sees
+        only X's own original columns, never another column's knockoff.
+
+        :param kwargs: Forwarded to xgboost.XGBClassifier -- see the module
+            docstring for the relevant kwargs (max_depth, learning_rate,
+            min_child_weight, subsample, colsample_bytree, reg_alpha,
+            reg_lambda, gamma, n_estimators).
+        :param weight: Optional length-n sample weight, forwarded to each
+            per-column XGBClassifier.fit(sample_weight=weight). None (default)
+            fits unweighted.
+    """
+    X = _resolve_df( X )
+    X_pd: pd.DataFrame = X.to_pandas()
+
+    if verbose > 0:
+        print( verbose_prefix + 'Fitting xgboost ohe probabilities' )
+    #
+
+    columns_dict: dict[ str, np.ndarray ] = {}
+    for col, dtype in X.schema.items():
+        if dtype != pl.Categorical:
+            continue
+        #
+        if verbose > 0:
+            print( verbose_prefix + '  column: {}'.format( col ) )
+        #
+        categories: list[ str ] = _categories_for( X, col )
+        columns_dict[ col ] = _fit_probability_forest( X_pd, col, categories, rng, kwargs, weight = weight )
+    #/for col, dtype in X.schema.items()
+
+    if logit:
+        for col in columns_dict:
+            proba: np.ndarray = columns_dict[col]
+            zeroMask: np.ndarray = (proba == 0.0)
+            if np.any( zeroMask ):
+                predictions_infMask: np.ndarray = np.where(
+                    zeroMask, np.inf, proba
+                )
+                proba_min = np.min( predictions_infMask, axis = 0 )
+                proba = np.where( zeroMask, proba_min, proba )
+                proba = proba / np.sum( proba, axis = 1 )[:,np.newaxis]
+            columns_dict[col] = np.log( proba )
+        #
+    #/if logit
+
+    if drop_first:
+        if logit:
+            # Subtract first column and drop it
+            columns_dict = {
+                col: val[:,1:] - val[:,0:1]\
+                    for col, val in columns_dict.items()
+            }
+        #
+        else:
+            # Just drop first
+            columns_dict = {
+                col: val[:,1:]\
+                    for col, val in columns_dict.items()
+            }
+        #/if logit/else
+    #/if drop_first
+
+    X_ohe_probabilities_np: np.ndarray = np.concatenate(
+        tuple(
+            columns_dict[col] if dtype == pl.Categorical\
+                else X[col].to_numpy()[:,np.newaxis]\
+                for col, dtype in X.schema.items()
+            #/
+        ),
+        axis = 1,
+    )
+
+    assert X_ohe_probabilities_np.shape[0] == X.shape[0]
+    assert X_ohe_probabilities_np.shape[1] >= X.shape[1]
+
+    return X_ohe_probabilities_np
+#/def get_ohe_forest_probabilities_np
+
+
 def get_forest_conditional_expectations(
     X: DataFrameLike,
     verbose: int = 0,

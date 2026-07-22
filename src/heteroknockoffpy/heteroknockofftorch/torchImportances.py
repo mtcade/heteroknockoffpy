@@ -26,6 +26,22 @@ def _prism_cycle(loader: DataLoader):
 #/def _prism_cycle
 
 
+class _SqueezeLast(nn.Module):
+    """
+    Squeezes a module's trailing size-1 output dim, mirroring the
+    `out.squeeze(-1) if self.output_size == 1 else out` convention every
+    `_PRISMNetworkBase.forward()` uses -- `build_prefit_module()` composes
+    existing layers directly (bypassing that `forward()`), so this needs to be
+    appended explicitly wherever build_prefit_module's raw output would
+    otherwise stay (n, 1) while the loss target is (n,), silently broadcasting
+    into an (n, n) pairwise comparison instead of an elementwise one.
+    """
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x.squeeze(-1)
+    #/def forward
+#/class _SqueezeLast
+
+
 def _weighted_loss(
     loss_func: nn.Module,
     pred: torch.Tensor,
@@ -193,7 +209,11 @@ class _PRISMNetworkMLP(_PRISMNetworkBase):
         hidden, input_size = self.net[0].weight.shape
         p_ohe = input_size // 2
         prefit_first = nn.Linear(p_ohe, hidden)
-        return nn.Sequential(prefit_first, *list(self.net.children())[1:])
+        modules = [prefit_first, *list(self.net.children())[1:]]
+        if self.output_size == 1:
+            modules.append(_SqueezeLast())
+        #
+        return nn.Sequential(*modules)
     #/def build_prefit_module
 
     def transfer_from_prefit(self, prefit_module: nn.Module, noise_std: float = 0.0) -> None:
@@ -282,6 +302,11 @@ class _PRISMNetworkPairwise(_PRISMNetworkBase):
     def build_prefit_module(self) -> nn.Module:
         # self.mlp is already sized for single-sided (post-filter, p-wide) input --
         # pre-fit trains it directly, in place, with no swap/filter step at all.
+        # Wrapping (rather than mutating) self.mlp keeps it shared by reference
+        # for the real model's forward(), which applies its own squeeze separately.
+        if self.output_size == 1:
+            return nn.Sequential(self.mlp, _SqueezeLast())
+        #
         return self.mlp
     #/def build_prefit_module
 

@@ -416,7 +416,7 @@ class TestOheConsistency:
 
         x_cats = _x_categories(X)
         Xk_renamed = Xk.rename({"col": "col~"})
-        X_all = pl.concat([X, Xk_renamed], how="horizontal")
+        X_all = pl.concat([X, Xk_renamed], how="horizontal_extend")
 
         override = {**x_cats, **{"col~": x_cats["col"]}}
         d = get_oheDict(X_all, drop_first=True, categories_override=override)
@@ -457,7 +457,7 @@ class TestOheConsistency:
         Xk = collapse_ohe(X, Xk_ohe, method="max", drop_first=True)
 
         x_cats = _x_categories(X)
-        X_all = pl.concat([X, Xk.rename({"col": "col~"})], how="horizontal")
+        X_all = pl.concat([X, Xk.rename({"col": "col~"})], how="horizontal_extend")
         override = {**x_cats, **{"col~": x_cats["col"]}}
         d = get_oheDict(X_all, drop_first=True, categories_override=override)
 

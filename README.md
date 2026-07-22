@@ -12,7 +12,7 @@ Based on the knockoff filter framework ([Candès et al., 2018](https://academic.
 pip install heteroknockoffpy
 ```
 
-`categorical_method='forest'`, `categorical_method='ranger_scip'`, and `method='ranger_SCIP'` require R and `rpy2`. Install the `ranger` and `rangerKnockoff` R packages before using them. `categorical_method='xgb_scip'` and `method='xgb_SCIP'` use `xgboost` instead and don't require R.
+`categorical_method='ranger'`, `categorical_method='ranger_scip'`, and `method='ranger_SCIP'` require R and `rpy2`. Install the `ranger` R package before using them. `categorical_method='xgb'`, `categorical_method='xgb_scip'`, and `method='xgb_SCIP'` use `xgboost` instead and don't require R.
 
 On macOS, `xgboost` requires OpenMP:
 
@@ -43,10 +43,10 @@ Every knockoff function shares this common core of inputs:
 
 - **`X`** — Original data (numeric + `pl.Categorical` columns).
 - **`rng`** — `np.random.Generator` seeding the method's randomness (R/xgboost/OHE-sampling downstream, and, for `second_order`, R's own RNG).
-- **`categorical_method`** (`get_second_order`/`get_torchGAN` only) — How categorical columns are encoded before knockoffs are generated: `'forest'`/`'linear'`/`'ohe'`/`'ranger_scip'`/`'xgb_scip'`. See the `categorical_method` table below. Not a parameter of `get_rangerSCIP`/`get_xgbSCIP`, which handle categoricals natively.
+- **`categorical_method`** (`get_second_order`/`get_torchGAN` only) — How categorical columns are encoded before knockoffs are generated: `'ranger'`/`'linear'`/`'ohe'`/`'xgb'`/`'ranger_scip'`/`'xgb_scip'`. See the `categorical_method` table below. Not a parameter of `get_rangerSCIP`/`get_xgbSCIP`, which handle categoricals natively.
 - **`conditional_expectations`** — `pl.DataFrame` of `E[X_j | X_{-j}]` per numeric column; only relevant when `categorical_method` is `'ranger_scip'`/`'xgb_scip'`. Computed internally if omitted. See `conditional_expectations` below.
 - **`verbose`** / **`verbose_prefix`** — Verbosity level (`0` = silent) and a string prefix for any verbose print output, useful when nesting calls inside a higher-level loop.
-- **`weight`** — Optional length-`n` sample weight. `None` (default) fits unweighted. Forwarded to whichever step actually fits something: `'second_order'` uses it as a real weighted mean/covariance; `'forest'`/`'linear'`/`'ranger_scip'`/`'xgb_scip'` (as a `categorical_method` or as `method` itself) use it as native `case.weights`/`sample_weight`; `'ohe'` ignores it (no fit on that path); `'torch_GAN'` accepts it only for signature consistency — the GAN itself is unsupervised and does not use it, though it's still passed through to `categorical_method`'s own fit.
+- **`weight`** — Optional length-`n` sample weight. `None` (default) fits unweighted. Forwarded to whichever step actually fits something: `'second_order'` uses it as a real weighted mean/covariance; `'ranger'`/`'xgb'`/`'linear'`/`'ranger_scip'`/`'xgb_scip'` (as a `categorical_method` or as `method` itself) use it as native `case.weights`/`sample_weight`; `'ohe'` ignores it (no fit on that path); `'torch_GAN'` accepts it only for signature consistency — the GAN itself is unsupervised and does not use it, though it's still passed through to `categorical_method`'s own fit.
 
 ```python
 from heteroknockoffpy import knockoff
@@ -59,7 +59,7 @@ Xk = knockoff.get_knockoffs(
     X,
     method="second_order",   # "second_order" | "torch_GAN" | "ranger_SCIP" | "xgb_SCIP"
     rng=rng,
-    categorical_method="forest",
+    categorical_method="ranger",
 )
 ```
 
@@ -78,13 +78,14 @@ Controls how categorical columns are encoded before knockoffs are generated. Not
 
 | value | behavior |
 |---|---|
-| `'forest'` | Fits a ranger random forest per categorical column; uses predicted class-probability logits as a soft numeric encoding |
+| `'ranger'` | Fits a ranger random forest per categorical column; uses predicted class-probability logits as a soft numeric encoding |
+| `'xgb'` | Same as `'ranger'`, but the per-column probability model is an [`xgboost.XGBClassifier`](https://xgboost.readthedocs.io/en/latest/python/python_api.html) instead of an R ranger forest — no R/`rpy2` dependency. Recognized xgboost hyperparameters (`max_depth`, `learning_rate`, `min_child_weight`, `subsample`, `colsample_bytree`, `reg_alpha`, `reg_lambda`, `gamma`, `n_estimators` — same names as `xgbImportances`'s `model_kwargs`) are picked out of any extra keyword arguments passed to `get_knockoffs`/`get_second_order`/`get_torchGAN` |
 | `'linear'` | Same, but with logistic regression — lighter and faster |
 | `'ohe'` | Hard one-hot-encodes categories as floats; no probability smoothing |
 | `'ranger_scip'` | For numeric columns, operates on conditional residuals `X_j − E[X_j | X_{-j}]` so knockoffs respect the joint distribution; for categorical columns uses ranger forest-SCIP |
 | `'xgb_scip'` | Same as `'ranger_scip'`, but conditional expectations and categorical SCIP knockoffs are computed with sequential [`xgboost`](https://xgboost.readthedocs.io/en/latest/python/python_api.html) models instead of R ranger — no R/`rpy2` dependency |
 
-`'ranger_scip'`/`'xgb_scip'` are the most statistically principled approaches for mixed data. `'forest'` or `'linear'` are convenient defaults when a quick approximation is acceptable.
+`'ranger_scip'`/`'xgb_scip'` are the most statistically principled approaches for mixed data. `'ranger'`, `'xgb'`, or `'linear'` are convenient defaults when a quick approximation is acceptable.
 
 ### `conditional_expectations`
 

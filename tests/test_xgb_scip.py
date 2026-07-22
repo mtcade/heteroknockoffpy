@@ -16,7 +16,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from heteroknockoffpy.xgbScip import _categories_for, get_knockoffs_SCIP
+from heteroknockoffpy.xgbScip import _categories_for, get_knockoffs_SCIP, get_ohe_forest_probabilities_np
 
 
 def test_categories_for_returns_only_this_columns_values():
@@ -81,6 +81,28 @@ def test_xgb_SCIP_multi_categorical_knockoffs_stay_within_own_categories():
         # not from another categorical column's levels leaking in via the
         # shared dictionary
         assert set(Xk[col].unique().to_list()) <= set(_categories_for(X, col))
+
+
+def test_get_ohe_forest_probabilities_np_shape():
+    n = 100
+    rng = np.random.default_rng(0)
+    X = pl.DataFrame({
+        "a": rng.choice(["red", "green", "blue"], size=n),
+        "b": rng.choice(["cat", "dog"], size=n),
+        "x0": rng.standard_normal(n),
+    }).with_columns(
+        pl.col("a").cast(pl.Categorical),
+        pl.col("b").cast(pl.Categorical),
+    )
+
+    X_ohe_np = get_ohe_forest_probabilities_np(
+        X, rng=rng, max_depth=3, n_estimators=20,
+    )
+
+    assert X_ohe_np.shape[0] == X.shape[0]
+    # drop_first=True (default): 2 extra columns for "a" (3 levels - 1) + 1
+    # extra column for "b" (2 levels - 1), plus the untouched numeric column
+    assert X_ohe_np.shape[1] == 2 + 1 + 1
 
 
 @pytest.mark.parametrize("residuals_method", ["normal", "permute"])

@@ -16,10 +16,38 @@ import numpy as np
 
 from typing import Callable, Literal
 
+_XGB_MODEL_KWARGS: tuple[ str,... ] = (
+    'max_depth', 'learning_rate', 'min_child_weight', 'subsample',
+    'colsample_bytree', 'reg_alpha', 'reg_lambda', 'gamma', 'n_estimators',
+)
+
+def _pluck_xgb_kwargs( kwargs: dict ) -> dict:
+    """
+        Recognized xgboost hyperparameters, pulled out of a pooled kwargs dict
+        that may also contain unrelated method-level kwargs (e.g.
+        second_order's `shrink`) -- same names xgbImportances/xgbScip use for
+        their own `model_kwargs`, so one set of hyperparameters can be reused
+        across knockoff generation (categorical_method='xgb') and importance
+        scoring (e.g. xgbPrismImportances) without collision.
+    """
+    return { k: kwargs[k] for k in _XGB_MODEL_KWARGS if k in kwargs }
+#/def _pluck_xgb_kwargs
+
+def _drop_xgb_kwargs( kwargs: dict ) -> dict:
+    """
+        Complement of `_pluck_xgb_kwargs`: strips the recognized xgboost
+        hyperparameters out of a pooled kwargs dict before forwarding the rest
+        elsewhere (e.g. to R's `create.second_order`, which would raise on an
+        unrecognized argument like `max_depth`/`n_estimators` meant for
+        categorical_method='xgb' instead).
+    """
+    return { k: v for k, v in kwargs.items() if k not in _XGB_MODEL_KWARGS }
+#/def _drop_xgb_kwargs
+
 def get_withCallable(
     X: DataFrameLike,
     rng: np.random.Generator,
-    categorical_method: Literal['forest','linear','ohe','ranger_scip','xgb_scip'],
+    categorical_method: Literal['ranger','linear','ohe','xgb','ranger_scip','xgb_scip'],
     knockoffCallable: Callable[ [ np.ndarray ], np.ndarray ],
     conditional_expectations: pl.DataFrame | None = None,
     verbose: int = 0,
@@ -40,7 +68,14 @@ def get_withCallable(
             in `utilities.collapse_ohe`'s softmax sampling for the OHE-based
             categorical_methods).
         :param categorical_method:
-            - 'forest': Get logit probabilities with random forests
+            - 'ranger': Get logit probabilities with R ranger random forests
+            - 'xgb': Same as 'ranger', but the per-column probability model is
+              an xgboost.XGBClassifier instead of an R ranger forest -- no
+              R/rpy2 dependency. Recognized xgboost hyperparameters (see
+              `_pluck_xgb_kwargs`: max_depth, learning_rate, min_child_weight,
+              subsample, colsample_bytree, reg_alpha, reg_lambda, gamma,
+              n_estimators -- same names as `xgbImportances`'s `model_kwargs`)
+              are plucked out of `kwargs`.
             - 'linear': Get logit probabilities with logistic regression
             - 'ohe': One hot encode as a float
             - 'ranger_scip': With conditional residuals for numeric data, use ranger forest SCIP for categorical
@@ -56,10 +91,14 @@ def get_withCallable(
             calls -- those take backend-specific kwargs like ranger's `num_trees`/
             `mtry` that would collide in meaning with kwargs meant for
             `knockoffCallable`'s own call, e.g. `second_order`'s `shrink`); also
-            unused for the `'forest'`/`'linear'`/`'ohe'` branch. Reserved for
-            future per-categorical_method tuning.
+            unused for the `'ranger'`/`'linear'`/`'ohe'` branch, EXCEPT `'xgb'`,
+            which pulls its recognized xgboost hyperparameters out of this same
+            pooled dict via `_pluck_xgb_kwargs` (safe precisely because it only
+            takes the keys it recognizes, ignoring anything meant for
+            `knockoffCallable`). Otherwise reserved for future per-categorical_method
+            tuning.
         :param weight: Optional length-n sample weight, forwarded to whichever
-            categorical_method branch actually fits something ('forest'/
+            categorical_method branch actually fits something ('ranger'/'xgb'/
             'linear'/'ranger_scip'/'xgb_scip'); unused for 'ohe' (no fit on
             that path). None (default) fits unweighted.
         :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
@@ -106,12 +145,12 @@ def get_withCallable(
         logit: bool
         X_ohe_np: np.ndarray
         
-        if categorical_method == 'forest':
+        if categorical_method == 'ranger':
             from . import rbridge
-            
+
             oheMethod = 'softmax'
             logit = True
-            
+
             X_ohe_np = rbridge.get_ohe_forest_probabilities_np(
                 X = X,
                 logit = logit,
@@ -120,6 +159,23 @@ def get_withCallable(
                 verbose_prefix = verbose_prefix,
                 weight = weight,
                 #**kwargs,
+            )
+        #
+        elif categorical_method == 'xgb':
+            from . import xgbScip
+
+            oheMethod = 'softmax'
+            logit = True
+
+            X_ohe_np = xgbScip.get_ohe_forest_probabilities_np(
+                X = X,
+                logit = logit,
+                drop_first = True,
+                verbose = verbose,
+                verbose_prefix = verbose_prefix,
+                rng = rng,
+                weight = weight,
+                **_pluck_xgb_kwargs( kwargs ),
             )
         #
         elif categorical_method == 'linear':
@@ -170,7 +226,7 @@ def get_withCallable(
 def get_second_order(
     X: DataFrameLike,
     rng: np.random.Generator,
-    categorical_method: Literal['forest','linear','ohe','ranger_scip','xgb_scip',],
+    categorical_method: Literal['ranger','linear','ohe','xgb','ranger_scip','xgb_scip',],
     conditional_expectations: pl.DataFrame | None = None,
     verbose: int = 0,
     verbose_prefix: str = '',
@@ -189,16 +245,19 @@ def get_second_order(
             `get_withCallable`) and R's RNG (via `set.seed`) for the
             `create_second_order` draw itself.
         :param categorical_method: See `get_withCallable`'s docstring for the
-            full list ('forest'/'linear'/'ohe'/'ranger_scip'/'xgb_scip'); 'ranger_scip'/'xgb_scip'
+            full list ('ranger'/'linear'/'ohe'/'xgb'/'ranger_scip'/'xgb_scip'); 'ranger_scip'/'xgb_scip'
             route numeric columns through conditional-residual knockoffs (this
             function's second-order draw operates on the *residuals*, not the raw
             columns) and categorical columns through backend-specific SCIP.
         :param conditional_expectations: Numeric conditional expectations. If not provided, uses `rbridge.get_forest_conditional_expectations`/`xgbScip.get_forest_conditional_expectations` to calculate, if `categorical_method` in ('ranger_scip', 'xgb_scip')
         :param verbose: Verbosity level (0 = silent), forwarded through to the R call.
         :param verbose_prefix: String prepended to any verbose print output.
-        :param kwargs: Forwarded to `rbridge.get_knockoffs_second_order_np`, which
-            forwards its own remaining kwargs to R `knockoff::create.second_order`.
-            The one kwarg it specifically recognizes:
+        :param kwargs: Forwarded to `rbridge.get_knockoffs_second_order_np` (minus
+            any recognized xgboost hyperparameters -- see `_drop_xgb_kwargs` --
+            which are meant for `categorical_method='xgb'` instead and would
+            otherwise reach R as unrecognized arguments), which forwards its own
+            remaining kwargs to R `knockoff::create.second_order`. The one kwarg
+            it specifically recognizes:
               - `shrink` (bool, default `True`): whether `create.second_order`
                 shrinks the estimated covariance matrix before drawing knockoffs
                 (recommended when `X`'s column count approaches or exceeds `X`'s
@@ -206,8 +265,9 @@ def get_second_order(
                 `False` uses the raw sample covariance directly; changing it
                 produces materially different knockoffs (confirmed empirically),
                 so it's worth setting explicitly when `p` is large relative to `n`.
-            Also forwarded down to `get_withCallable`'s own `**kwargs` (currently
-            unused there for either branch -- see that docstring).
+            Also forwarded down to `get_withCallable`'s own `**kwargs` (used only
+            by the `'xgb'` branch there via `_pluck_xgb_kwargs` -- see that
+            docstring).
         :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
     """
     from . import _processIsolation
@@ -221,7 +281,7 @@ def get_second_order(
             verbose_prefix = verbose_prefix,
             rng = rng,
             weight = weight,
-            **kwargs,
+            **_drop_xgb_kwargs( kwargs ),
         )
     #/def knockoffCallable
 
@@ -241,7 +301,7 @@ def get_second_order(
 def get_torchGAN(
     X: DataFrameLike,
     rng: np.random.Generator,
-    categorical_method: Literal['forest','linear','ohe','ranger_scip','xgb_scip',],
+    categorical_method: Literal['ranger','linear','ohe','xgb','ranger_scip','xgb_scip',],
     conditional_expectations: pl.DataFrame | None = None,
     verbose: int = 0,
     verbose_prefix: str = '',
@@ -267,7 +327,7 @@ def get_torchGAN(
             `get_withCallable`); NOT used to seed torch's own RNG (the GAN
             training loop uses torch's ambient/global RNG state, unseeded).
         :param categorical_method: See `get_withCallable`'s docstring for the
-            full list ('forest'/'linear'/'ohe'/'ranger_scip'/'xgb_scip').
+            full list ('ranger'/'linear'/'ohe'/'xgb'/'ranger_scip'/'xgb_scip').
         :param conditional_expectations: Numeric conditional expectations. If not
             provided, uses `rbridge.get_forest_conditional_expectations`/
             `xgbScip.get_forest_conditional_expectations` to calculate, if
@@ -310,7 +370,7 @@ def get_torchGAN(
             weighted-training scheme would mean weighted minibatch sampling,
             a materially different mechanism, and was decided out of scope).
             Still forwarded to `categorical_method`'s own fit (which DOES use
-            it, when 'forest'/'linear'/'ranger_scip'/'xgb_scip').
+            it, when 'ranger'/'xgb'/'linear'/'ranger_scip'/'xgb_scip').
         :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
     """
     from . import _processIsolation
