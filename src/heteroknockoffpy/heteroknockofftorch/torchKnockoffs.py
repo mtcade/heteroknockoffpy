@@ -472,12 +472,23 @@ def fit_predict(
     mb_size: int = 128,
     niter: int = 2000,
     combined_inner: bool = False,
+    torch_seed: int | None = None,
 ) -> np.ndarray:
     """
     Trains a TorchGAN on x and returns its knockoff predictions. The leaf entry point
     for get_torchGAN's isolated call -- keeps torch confined to this module so
     _processIsolation can reliably decide whether to spawn a subprocess.
+
+    :param torch_seed: If given, seeds torch's global RNG (`torch.manual_seed`)
+        before `TorchGAN` is constructed -- covers its parameter init and the
+        minibatch permutations drawn during `.fit()`, both of which use torch's
+        ambient/global generator with no explicit `generator=` kwarg. `None`
+        (default) leaves torch's RNG state untouched.
     """
+    if torch_seed is not None:
+        torch.manual_seed( torch_seed )
+    #
+
     model = TorchGAN(
         shape = x.shape,
         x_name = x_name,

@@ -103,17 +103,24 @@ def get_withCallable(
             that path). None (default) fits unweighted.
         :returns: `pl.DataFrame` of knockoffs with the same schema as `X`.
     """
+    from . import _processIsolation
+
     X = _resolve_df(X)
     if categorical_method in ( 'ranger_scip', 'xgb_scip' ):
-        if categorical_method == 'ranger_scip':
-            from . import rbridge as _scipBackend
-        else:
-            from . import xgbScip as _scipBackend
-        #/if categorical_method == 'ranger_scip'/else
+        _scipModule = (
+            'heteroknockoffpy.rbridge' if categorical_method == 'ranger_scip'
+            else 'heteroknockoffpy.xgbScip'
+        )
 
-        # Conditional residuals knockoffs
+        # Conditional residuals knockoffs. Routed through _processIsolation (rather
+        # than a direct top-level import + call, as this used to do) because both
+        # backends are _GUARDED_MODULES entries -- rpy2/xgboost crash on macOS if
+        # loaded into the same process as torch (e.g. after any prior PRISM-torch
+        # or Deep-Knockoffs-GAN call), and a direct import here bypassed that guard.
         if conditional_expectations is None:
-            conditional_expectations: pl.DataFrame = _scipBackend.get_forest_conditional_expectations(
+            conditional_expectations: pl.DataFrame = _processIsolation.run_isolated_if_loaded(
+                _scipModule,
+                'get_forest_conditional_expectations',
                 X = X,
                 verbose = verbose,
                 verbose_prefix = verbose_prefix,
@@ -130,7 +137,9 @@ def get_withCallable(
             ).to_numpy() - ce_np
         )
 
-        return _scipBackend.get_knockoffs_with_Xk_numeric(
+        return _processIsolation.run_isolated_if_loaded(
+            _scipModule,
+            'get_knockoffs_with_Xk_numeric',
             X = X,
             Xk_numeric = ce_np + Xk_residuals,
             rng = rng,
@@ -144,14 +153,18 @@ def get_withCallable(
         oheMethod: Literal['softmax','max']
         logit: bool
         X_ohe_np: np.ndarray
-        
-        if categorical_method == 'ranger':
-            from . import rbridge
 
+        if categorical_method == 'ranger':
             oheMethod = 'softmax'
             logit = True
 
-            X_ohe_np = rbridge.get_ohe_forest_probabilities_np(
+            # Routed through _processIsolation for the same reason as the scip
+            # branch above: heteroknockoffpy.rbridge is a _GUARDED_MODULES entry
+            # (rpy2), and a direct top-level `from . import rbridge` here bypassed
+            # that guard.
+            X_ohe_np = _processIsolation.run_isolated_if_loaded(
+                'heteroknockoffpy.rbridge',
+                'get_ohe_forest_probabilities_np',
                 X = X,
                 logit = logit,
                 drop_first = True,
@@ -162,12 +175,16 @@ def get_withCallable(
             )
         #
         elif categorical_method == 'xgb':
-            from . import xgbScip
-
             oheMethod = 'softmax'
             logit = True
 
-            X_ohe_np = xgbScip.get_ohe_forest_probabilities_np(
+            # Routed through _processIsolation: heteroknockoffpy.xgbScip is a
+            # _GUARDED_MODULES entry (xgboost), and a direct top-level
+            # `from . import xgbScip` here bypassed that guard -- this was the
+            # actual segfault reproduced with torch already loaded in-process.
+            X_ohe_np = _processIsolation.run_isolated_if_loaded(
+                'heteroknockoffpy.xgbScip',
+                'get_ohe_forest_probabilities_np',
                 X = X,
                 logit = logit,
                 drop_first = True,
@@ -324,8 +341,11 @@ def get_torchGAN(
 
         :param X: Original data (numeric + `pl.Categorical` columns).
         :param rng: Seeds `categorical_method`'s randomness (see
-            `get_withCallable`); NOT used to seed torch's own RNG (the GAN
-            training loop uses torch's ambient/global RNG state, unseeded).
+            `get_withCallable`) AND torch's global RNG for the GAN training loop:
+            each `knockoffCallable` invocation draws a fresh seed from `rng` and
+            passes it to `fit_predict`, which calls `torch.manual_seed` before
+            constructing `TorchGAN` -- covering parameter init and minibatch
+            sampling for full run-to-run reproducibility.
         :param categorical_method: See `get_withCallable`'s docstring for the
             full list ('ranger'/'linear'/'ohe'/'xgb'/'ranger_scip'/'xgb_scip').
         :param conditional_expectations: Numeric conditional expectations. If not
@@ -376,6 +396,10 @@ def get_torchGAN(
     from . import _processIsolation
 
     def knockoffCallable( x: np.ndarray ) -> np.ndarray:
+        # Fresh draw per invocation (knockoffCallable may be called more than once,
+        # e.g. once per categorical group) so each GAN fit gets a decorrelated but
+        # run-to-run-reproducible seed from the same rng stream.
+        torch_seed = int( rng.integers( 0, 2**63 ) )
         return _processIsolation.run_isolated_if_loaded(
             'heteroknockoffpy.heteroknockofftorch.torchKnockoffs',
             'fit_predict',
@@ -388,6 +412,7 @@ def get_torchGAN(
             mb_size        = kwargs.get( 'mb_size',         128      ),
             niter          = kwargs.get( 'niter',           2000     ),
             combined_inner = kwargs.get( 'combined_inner',  False    ),
+            torch_seed     = torch_seed,
         )
     #/def knockoffCallable
     

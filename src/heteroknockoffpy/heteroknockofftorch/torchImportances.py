@@ -491,6 +491,15 @@ class PRISMPredictionModel:
     -noise on the Xk half -- to break the tie while keeping both halves' expected
     values equal. Set to 0.0 for an exact symmetric transfer.
 
+    rng
+    ---
+    If given, seeds torch's global RNG (`torch.manual_seed`) once at construction,
+    before any model parameters are created. Every source of torch randomness in
+    this class and `_vertical_prefit` (parameter init, `DataLoader(shuffle=True)`,
+    `torch.randperm`) draws from that global generator with no explicit
+    `generator=` kwarg, so this one seed call makes an entire `fit()` run fully
+    reproducible. `None` (default) leaves torch's ambient RNG state untouched.
+
     Implements fit / predict / predict_t / auto_diff / auto_diff_t / jacobian_t.
     """
 
@@ -503,8 +512,8 @@ class PRISMPredictionModel:
         output_dimension: int = 1,
         learning_rate: float = 0.01,
         epochs: int = 500,
-        model_type: Literal['mlp','pairwise','additive',] = 'pairwise',
-        n_warmup: int = 0,
+        model_type: Literal['mlp','pairwise','additive',] = 'mlp',
+        n_warmup: int = 5000,
         warmup_patience: int = 20,
         warmup_check_interval: int = 50,
         warmup_tol: float = 1e-4,
@@ -514,12 +523,22 @@ class PRISMPredictionModel:
         vertical_prefit: bool = False,
         prefit_noise_std: float = 0.01,
         reset_optimizer: bool = True,
+        rng: np.random.Generator | None = None,
     ) -> None:
         activation_class: Type[nn.Module]
         if isinstance(dense_activation, str):
             activation_class = _nnModule_dict[dense_activation]
         else:
             activation_class = dense_activation
+        #
+
+        # Seed torch's global RNG once, before any model parameters are
+        # constructed below -- every torch.randn/randperm/DataLoader(shuffle=True)
+        # call in this module and _vertical_prefit draws from that global
+        # generator with no explicit `generator=` kwarg, so this single call is
+        # both necessary and sufficient for full run-to-run reproducibility.
+        if rng is not None:
+            torch.manual_seed(int(rng.integers(0, 2**63)))
         #
 
         self.device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu"

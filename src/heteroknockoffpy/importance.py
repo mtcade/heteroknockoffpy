@@ -20,10 +20,11 @@ def prismWImportances(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
+    n_blocks: int = 30,
     batch_size: int | None = None,
     epochs: int = 500,
-    model_type: str = 'pairwise',
-    n_warmup: int = 0,
+    model_type: str = 'mlp',
+    n_warmup: int = 5000,
     vertical_prefit: bool = False,
     prefit_noise_std: float = 0.01,
     reset_optimizer: bool = True,
@@ -32,6 +33,7 @@ def prismWImportances(
     dense_activation: str = 'relu',
     verbose: int = 0,
     weight: np.ndarray | None = None,
+    rng: np.random.Generator | None = None,
     ) -> np.ndarray:
     """
     PRISM-W importances: average of group-norm snapshots over a lambda regularization path.
@@ -48,15 +50,23 @@ def prismWImportances(
         `round(prev * layer_ratio)`, where `p` is the OHE-expanded width of
         [X, Xk] combined, though any explicit sequence of widths works.
     :param model_type: see heteroknockofftorch.torchImportances.PRISMPredictionModel docstring
-        for the full list ('mlp', 'pairwise', 'additive'). Default `'pairwise'`.
+        for the full list ('mlp', 'pairwise', 'additive'). Default `'mlp'`.
     :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
-    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50) if omitted.
-    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
+    :param lambda_path: Sequence of lambda values. If None (default), a fresh path of
+        `n_blocks` values is drawn from LogUniform(1e-3, 1e-1) via `rng` at call time --
+        a `def` default can't itself express "sample fresh values each call," so this
+        dynamic behavior isn't visible from the signature alone. Pass an explicit
+        sequence for a reproducible, inspectable path instead of relying on this default.
+    :param a_path: Per-stage input-layer penalty values. If None (default), drawn
+        independently from Uniform(0.3, 1) via `rng`, at the resolved lambda_path's
+        length (NOT mirrored from lambda_path's own values).
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
+        Ignored if `lambda_path` is given explicitly.
     :param batch_size: Minibatch size; `None` (the default) uses full-batch training.
     :param epochs: Total training epochs, distributed as evenly as possible
         across lambda stages. Default `500`.
-    :param n_warmup: Epochs of warmup training before entering the lambda-path
-        schedule. Default `0`.
+    :param n_warmup: Steps of warmup training before entering the lambda-path
+        schedule. Default `5000`.
     :param vertical_prefit: Whether to prefit a smaller model and transfer its
         weights vertically into the full model before the lambda-path loop.
     :param prefit_noise_std: Std of noise added when duplicating prefit weights
@@ -68,6 +78,9 @@ def prismWImportances(
         category dropped (standard identifiability convention).
     :param dense_activation: Activation function name for the MLP's hidden layers.
     :param verbose: Verbosity level (0 = silent).
+    :param rng: Seeds the default lambda/a-path draw above and torch's global RNG
+        (parameter init, DataLoader shuffling, etc.) for full run-to-run
+        reproducibility. Unseeded if omitted.
     :returns: Array of shape (2*p,) — first p entries for X, last p for Xk.
     """
     from . import _processIsolation
@@ -79,6 +92,7 @@ def prismWImportances(
         outcome_type = outcome_type,
         lambda_path = lambda_path,
         a_path = a_path,
+        n_blocks = n_blocks,
         batch_size = batch_size,
         epochs = epochs,
         model_type = model_type,
@@ -91,6 +105,7 @@ def prismWImportances(
         dense_activation = dense_activation,
         verbose = verbose,
         weight = weight,
+        rng = rng,
     )
 #/def prismWImportances
 
@@ -102,10 +117,11 @@ def prismWImportancesPerOHE(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
+    n_blocks: int = 30,
     batch_size: int | None = None,
     epochs: int = 500,
     model_type: Literal['mlp','pairwise',] = 'mlp',
-    n_warmup: int = 0,
+    n_warmup: int = 5000,
     vertical_prefit: bool = False,
     prefit_noise_std: float = 0.01,
     reset_optimizer: bool = True,
@@ -114,6 +130,7 @@ def prismWImportancesPerOHE(
     dense_activation: str = 'relu',
     verbose: int = 0,
     weight: np.ndarray | None = None,
+    rng: np.random.Generator | None = None,
     ) -> np.ndarray:
     """
     PRISM-W importances, but every OHE dummy column is treated as its own independent
@@ -129,8 +146,8 @@ def prismWImportancesPerOHE(
     a per-dummy treatment.
 
     See `prismWImportances`'s docstring for the shared parameter meanings
-    (`layers` construction, `lambda_path`/`a_path`, etc.) -- all apply
-    identically here.
+    (`layers` construction, `lambda_path`/`a_path`/`n_blocks`/`rng`, etc.) -- all
+    apply identically here.
 
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.
@@ -138,11 +155,12 @@ def prismWImportancesPerOHE(
     :param layers: Hidden-layer widths for the MLP; see `prismWImportances`.
     :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
     :param model_type: 'mlp' or 'pairwise' only.
-    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
-    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
+    :param lambda_path: See `prismWImportances` -- if None, drawn from LogUniform(1e-3, 1e-1).
+    :param a_path: If None, drawn independently from Uniform(0.3, 1).
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
     :param batch_size: Minibatch size; `None` uses full-batch training.
     :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
-    :param n_warmup: Epochs of warmup training before entering the lambda-path schedule.
+    :param n_warmup: Steps of warmup training before entering the lambda-path schedule.
     :param vertical_prefit: Whether to prefit a smaller model and transfer its
         weights vertically into the full model before the lambda-path loop.
     :param prefit_noise_std: Std of noise added when duplicating prefit weights
@@ -154,6 +172,7 @@ def prismWImportancesPerOHE(
         category dropped (standard identifiability convention).
     :param dense_activation: Activation function name for the MLP's hidden layers.
     :param verbose: Verbosity level (0 = silent).
+    :param rng: Seeds the default lambda/a-path draw and torch's global RNG.
     :returns: Array of shape (2*p_ohe,) — first p_ohe entries for X's OHE-expanded columns,
         last p_ohe for Xk's. p_ohe is the total OHE-expanded width per side (numeric columns
         contribute 1 entry each, a K-category column contributes K-1 entries under
@@ -168,6 +187,7 @@ def prismWImportancesPerOHE(
         outcome_type = outcome_type,
         lambda_path = lambda_path,
         a_path = a_path,
+        n_blocks = n_blocks,
         batch_size = batch_size,
         epochs = epochs,
         model_type = model_type,
@@ -180,6 +200,7 @@ def prismWImportancesPerOHE(
         dense_activation = dense_activation,
         verbose = verbose,
         weight = weight,
+        rng = rng,
     )
 #/def prismWImportancesPerOHE
 
@@ -190,15 +211,16 @@ def prismGImportances(
     y: SeriesOrDataFrameLike,
     layers: Sequence[ int ],
     outcome_type: Literal['continuous','count','categorical',] | None = None,
-    local_grad_method: Literal['auto_diff','bandwidth'] = 'auto_diff',
+    local_grad_method: Literal['auto_diff','bandwidth'] = 'bandwidth',
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
+    n_blocks: int = 30,
     batch_size: int | None = None,
     epochs: int = 500,
-    bandwidth: float | None = None,
+    bandwidth: float | None = 1.0,
     exponent: float = 1.0,
-    model_type: str = 'pairwise',
-    n_warmup: int = 0,
+    model_type: str = 'mlp',
+    n_warmup: int = 5000,
     vertical_prefit: bool = False,
     prefit_noise_std: float = 0.01,
     reset_optimizer: bool = True,
@@ -206,8 +228,8 @@ def prismGImportances(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
-    bandwidth_exponent: float = 0.2,
     weight: np.ndarray | None = None,
+    rng: np.random.Generator | None = None,
     ) -> np.ndarray:
     """
     PRISM-G importances: average of PRISM local-gradient snapshots over a lambda path.
@@ -216,8 +238,8 @@ def prismGImportances(
     PRISM importances (auto_diff or bandwidth) of the current model are recorded.
 
     Shares `prismWImportances`'s training-loop parameters -- see that docstring
-    for details. `local_grad_method`/`bandwidth`/`exponent`/`bandwidth_exponent`
-    below are specific to the PRISM-G local-gradient step.
+    for details. `local_grad_method`/`bandwidth`/`exponent` below are specific to
+    the PRISM-G local-gradient step.
 
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.
@@ -225,18 +247,25 @@ def prismGImportances(
     :param layers: Hidden-layer widths for the MLP; see `prismWImportances`.
     :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
     :param model_type: see heteroknockofftorch.torchImportances.PRISMPredictionModel docstring
-        for the full list ('mlp', 'pairwise', 'additive'). Default `'pairwise'`.
-    :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite
-        difference). Default `'auto_diff'`.
-    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
-    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
+        for the full list ('mlp', 'pairwise', 'additive'). Default `'mlp'`.
+    :param local_grad_method: 'auto_diff' (exact autodiff gradient) or 'bandwidth'
+        (finite difference). Default `'bandwidth'` -- combined with `bandwidth=1.0`
+        below, this matches the proposal's central-difference-at-+/-1 statistic
+        exactly, since X is standardized to unit variance before this step.
+    :param lambda_path: Sequence of lambda values. If None (default), a fresh path of
+        `n_blocks` values is drawn from LogUniform(1e-3, 1e-1) via `rng` at call
+        time -- see `prismWImportances`'s docstring for why this default is dynamic.
+    :param a_path: Per-stage input-layer penalty values. If None (default), drawn
+        independently from Uniform(0.3, 1) via `rng`, at the resolved lambda_path's length.
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
     :param batch_size: Minibatch size; `None` uses full-batch training.
     :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
-    :param bandwidth: Bandwidth for finite-difference approximation (auto-set if
-        None). Only relevant when `local_grad_method='bandwidth'`.
+    :param bandwidth: Bandwidth for the finite-difference approximation when
+        `local_grad_method='bandwidth'`. Used exactly as given -- no auto-scaling
+        from `n` or column std. Default `1.0`.
     :param exponent: Power applied to each local gradient value before
         averaging. Default `1.0`.
-    :param n_warmup: Epochs of warmup training before entering the lambda-path schedule.
+    :param n_warmup: Steps of warmup training before entering the lambda-path schedule.
     :param vertical_prefit: Whether to prefit a smaller model and transfer its
         weights vertically into the full model before the lambda-path loop.
     :param prefit_noise_std: Std of noise added when duplicating prefit weights
@@ -248,8 +277,7 @@ def prismGImportances(
         category dropped (standard identifiability convention).
     :param dense_activation: Activation function name for the MLP's hidden layers.
     :param verbose: Verbosity level (0 = silent).
-    :param bandwidth_exponent: Exponent used for the auto-set bandwidth (n ** -bandwidth_exponent)
-        when bandwidth is None. Ignored if bandwidth is given explicitly. Default `0.2`.
+    :param rng: Seeds the default lambda/a-path draw and torch's global RNG.
     :returns: Array of shape (2*p,).
     """
     from . import _processIsolation
@@ -262,6 +290,7 @@ def prismGImportances(
         local_grad_method = local_grad_method,
         lambda_path = lambda_path,
         a_path = a_path,
+        n_blocks = n_blocks,
         batch_size = batch_size,
         epochs = epochs,
         bandwidth = bandwidth,
@@ -275,8 +304,8 @@ def prismGImportances(
         drop_first = drop_first,
         dense_activation = dense_activation,
         verbose = verbose,
-        bandwidth_exponent = bandwidth_exponent,
         weight = weight,
+        rng = rng,
     )
 #/def prismGImportances
 
@@ -287,15 +316,16 @@ def prismGWImportances(
     y: SeriesOrDataFrameLike,
     layers: Sequence[ int ],
     outcome_type: Literal['continuous','count','categorical',] | None = None,
-    local_grad_method: Literal['auto_diff','bandwidth'] = 'auto_diff',
+    local_grad_method: Literal['auto_diff','bandwidth'] = 'bandwidth',
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
+    n_blocks: int = 30,
     batch_size: int | None = None,
     epochs: int = 500,
-    bandwidth: float | None = None,
+    bandwidth: float | None = 1.0,
     exponent: float = 1.0,
-    model_type: str = 'pairwise',
-    n_warmup: int = 0,
+    model_type: str = 'mlp',
+    n_warmup: int = 5000,
     vertical_prefit: bool = False,
     prefit_noise_std: float = 0.01,
     reset_optimizer: bool = True,
@@ -303,8 +333,8 @@ def prismGWImportances(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
-    bandwidth_exponent: float = 0.2,
     weight: np.ndarray | None = None,
+    rng: np.random.Generator | None = None,
     ) -> tuple[ np.ndarray, np.ndarray ]:
     """
     PRISM-G and PRISM-W importances from a single training pass.
@@ -321,20 +351,23 @@ def prismGWImportances(
         `round(prev * layer_ratio)`, though any explicit sequence of widths works.
     :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
     :param model_type: see heteroknockofftorch.torchImportances.PRISMPredictionModel docstring
-        for the full list ('mlp', 'pairwise', 'additive'). Default `'pairwise'`.
-    :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite
-        difference). Default `'auto_diff'`.
-    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50) if omitted.
-    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
+        for the full list ('mlp', 'pairwise', 'additive'). Default `'mlp'`.
+    :param local_grad_method: See `prismGImportances`. Default `'bandwidth'`.
+    :param lambda_path: Sequence of lambda values. If None (default), drawn from
+        LogUniform(1e-3, 1e-1) via `rng` -- see `prismWImportances`'s docstring.
+    :param a_path: Per-stage input-layer penalty values. If None (default), drawn
+        independently from Uniform(0.3, 1) via `rng`.
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
     :param batch_size: Minibatch size; `None` (the default) uses full-batch training.
     :param epochs: Total training epochs, distributed as evenly as possible
         across lambda stages. Default `500`.
-    :param bandwidth: Bandwidth for finite-difference approximation (auto-set if
-        None). Only relevant when `local_grad_method='bandwidth'`.
+    :param bandwidth: Bandwidth for the finite-difference approximation when
+        `local_grad_method='bandwidth'`. Used exactly as given -- no auto-scaling
+        from `n`. Default `1.0`.
     :param exponent: Power applied to each local gradient value before
         averaging. Default `1.0`.
-    :param n_warmup: Epochs of warmup training before entering the lambda-path
-        schedule. Default `0`.
+    :param n_warmup: Steps of warmup training before entering the lambda-path
+        schedule. Default `5000`.
     :param vertical_prefit: Whether to prefit a smaller model and transfer its
         weights vertically into the full model before the lambda-path loop.
     :param prefit_noise_std: Std of noise added when duplicating prefit weights
@@ -346,8 +379,7 @@ def prismGWImportances(
         category dropped (standard identifiability convention).
     :param dense_activation: Activation function name for the MLP's hidden layers.
     :param verbose: Verbosity level (0 = silent).
-    :param bandwidth_exponent: Exponent used for the auto-set bandwidth (n ** -bandwidth_exponent)
-        when bandwidth is None. Ignored if bandwidth is given explicitly. Default `0.2`.
+    :param rng: Seeds the default lambda/a-path draw and torch's global RNG.
     :returns: (g_importances, w_importances) both of shape (2*p,).
     """
     from . import _processIsolation
@@ -360,6 +392,7 @@ def prismGWImportances(
         local_grad_method = local_grad_method,
         lambda_path = lambda_path,
         a_path = a_path,
+        n_blocks = n_blocks,
         batch_size = batch_size,
         epochs = epochs,
         bandwidth = bandwidth,
@@ -373,8 +406,8 @@ def prismGWImportances(
         drop_first = drop_first,
         dense_activation = dense_activation,
         verbose = verbose,
-        bandwidth_exponent = bandwidth_exponent,
         weight = weight,
+        rng = rng,
     )
 #/def prismGWImportances
 
@@ -388,11 +421,12 @@ def prismGLocalGradients(
     local_grad_method: Literal["auto_diff","bandwidth"] = 'bandwidth',
     lambda_path:       Sequence[float] | None = None,
     a_path:            Sequence[float] | None = None,
+    n_blocks:          int = 30,
     batch_size:        int | None = None,
     epochs:            int = 500,
-    bandwidth:         float | None = None,
-    model_type:        str = 'pairwise',
-    n_warmup:          int = 0,
+    bandwidth:         float | None = 1.0,
+    model_type:        str = 'mlp',
+    n_warmup:          int = 5000,
     vertical_prefit:   bool = False,
     prefit_noise_std:  float = 0.01,
     reset_optimizer:   bool = True,
@@ -401,6 +435,7 @@ def prismGLocalGradients(
     dense_activation:  str = 'relu',
     verbose:           int = 0,
     weight:            np.ndarray | None = None,
+    rng:               np.random.Generator | None = None,
     ) -> np.ndarray:
     """
     Train a PRISM-G network on (X, Xk, y) and return the per-sample local gradient
@@ -412,27 +447,35 @@ def prismGLocalGradients(
     Categorical columns (c-1 per variable): model-prediction contrast vs. category 0
       (drop_first=True convention — category 0 is the implicit reference).
 
+    Only continuous/count outcomes are supported: `outcome_type='categorical'`
+    raises `NotImplementedError` -- there's no established reduction of a
+    multiclass model's (n, k) logits into this function's (n, p_ohe_x)
+    per-sample-scalar-gradient contract (unlike `prismGImportances`, which
+    aggregates via Mahalanobis distance into one importance number).
+
     Shares `prismGImportances`'s training-loop parameters -- see that docstring
     for details; this function differs only in defaulting `local_grad_method`
-    to `'bandwidth'` and returning the raw per-sample gradient matrix (for X
-    only) instead of the lambda-path-averaged scalar importances.
+    to `'bandwidth'` (same as `prismGImportances` now) and returning the raw
+    per-sample gradient matrix (for X only) instead of the lambda-path-averaged
+    scalar importances. X is standardized the same way as `prismGImportances`.
 
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.
-    :param y: Outcome; scalar (continuous/count) or categorical Series/DataFrame.
+    :param y: Outcome; scalar (continuous/count) Series/DataFrame.
     :param layers: Hidden-layer widths for the MLP; see `prismGImportances`.
-    :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
-    :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite
-        difference, the default here -- opposite of `prismGImportances`'s default).
-    :param lambda_path: Sequence of lambda values.
-    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
+    :param outcome_type: 'continuous'/'count'; inferred from `y` if omitted.
+        'categorical' raises `NotImplementedError`.
+    :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite difference).
+    :param lambda_path: If None (default), drawn from LogUniform(1e-3, 1e-1) via `rng`.
+    :param a_path: If None (default), drawn independently from Uniform(0.3, 1) via `rng`.
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
     :param batch_size: Minibatch size; `None` uses full-batch training.
     :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
-    :param bandwidth: Bandwidth for finite-difference approximation (auto-set if
-        None). Relevant since `local_grad_method` defaults to `'bandwidth'` here.
+    :param bandwidth: Bandwidth for the finite-difference approximation. Used
+        exactly as given -- no auto-scaling from `n`. Default `1.0`.
     :param model_type: see heteroknockofftorch.torchImportances.PRISMPredictionModel docstring
         for the full list ('mlp', 'pairwise', 'additive').
-    :param n_warmup: Epochs of warmup training before entering the lambda-path schedule.
+    :param n_warmup: Steps of warmup training before entering the lambda-path schedule.
     :param vertical_prefit: Whether to prefit a smaller model and transfer its
         weights vertically into the full model before the lambda-path loop.
     :param prefit_noise_std: Std of noise added when duplicating prefit weights
@@ -444,6 +487,7 @@ def prismGLocalGradients(
         category dropped (standard identifiability convention).
     :param dense_activation: Activation function name for the MLP's hidden layers.
     :param verbose: Verbosity level (0 = silent).
+    :param rng: Seeds the default lambda/a-path draw and torch's global RNG.
     """
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
@@ -455,6 +499,7 @@ def prismGLocalGradients(
         local_grad_method = local_grad_method,
         lambda_path = lambda_path,
         a_path = a_path,
+        n_blocks = n_blocks,
         batch_size = batch_size,
         epochs = epochs,
         bandwidth = bandwidth,
@@ -468,6 +513,7 @@ def prismGLocalGradients(
         dense_activation = dense_activation,
         verbose = verbose,
         weight = weight,
+        rng = rng,
     )
 #/def prismGLocalGradients
 
@@ -1461,7 +1507,7 @@ def wFromImportances(
                 W_out[ j ] = importances[ j ]
             #
             elif importances[ j ] < importances[ j+p ]:
-                W_out[ j ] = importances[ j+p ]
+                W_out[ j ] = -importances[ j+p ]
             #/switch importances[ j ] - importances[ j+p ]
         #/for j in range(p)
     else:

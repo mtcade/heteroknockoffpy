@@ -35,7 +35,7 @@ def test_prism_w_shape_and_nonneg():
         y = y,
         layers = [16, 8],
         lambda_path = lambda_path,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (20,), f"Expected shape (20,), got {imp.shape}"
     assert np.all(imp >= 0), "Importances should be non-negative"
@@ -51,7 +51,7 @@ def test_prism_g_shape_and_nonneg():
         layers = [16, 8],
         local_grad_method = 'auto_diff',
         lambda_path = lambda_path,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (20,), f"Expected shape (20,), got {imp.shape}"
     assert np.all(imp >= 0), "Importances should be non-negative"
@@ -67,7 +67,7 @@ def test_prism_g_bandwidth():
         layers = [8],
         local_grad_method = 'bandwidth',
         lambda_path = lambda_path,
-        epochs = 2,
+        epochs = 2, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -89,7 +89,7 @@ def test_prism_w_a_path_constant():
         layers = [8],
         lambda_path = lambda_path,
         a_path = a_path,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -107,7 +107,7 @@ def test_prism_w_a_path_uniform():
         layers = [8],
         lambda_path = lambda_path,
         a_path = a_path,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -126,7 +126,7 @@ def test_prism_w_a_path_shuffled():
         layers = [8],
         lambda_path = lambda_path,
         a_path = a_path,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -145,7 +145,7 @@ def test_prism_g_a_path_uniform():
         local_grad_method = 'auto_diff',
         lambda_path = lambda_path,
         a_path = a_path,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -165,7 +165,7 @@ def test_prism_g_a_path_shuffled():
         local_grad_method = 'auto_diff',
         lambda_path = lambda_path,
         a_path = a_path,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -182,7 +182,7 @@ def test_prism_w_a_path_none_runs():
         layers = [8],
         lambda_path = lambda_path,
         a_path = None,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -198,7 +198,7 @@ def test_prism_w_a_path_increasing_lambda():
         y = y,
         layers = [8],
         lambda_path = lambda_path,
-        epochs = 4,
+        epochs = 4, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -219,7 +219,7 @@ def test_prism_w_batch_size():
         layers = [8],
         lambda_path = lambda_path,
         batch_size = 32,
-        epochs = 4,
+        epochs = 4, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -237,7 +237,7 @@ def test_prism_g_batch_size():
         local_grad_method = 'auto_diff',
         lambda_path = lambda_path,
         batch_size = 32,
-        epochs = 4,
+        epochs = 4, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -254,7 +254,7 @@ def test_prism_w_batch_size_larger_than_n():
         layers = [8],
         lambda_path = lambda_path,
         batch_size = 512,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -273,7 +273,7 @@ def test_prism_w_a_path_and_batch_size():
         lambda_path = lambda_path,
         a_path = a_path,
         batch_size = 32,
-        epochs = 4,
+        epochs = 4, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -293,7 +293,7 @@ def test_prism_g_a_path_and_batch_size():
         lambda_path = lambda_path,
         a_path = a_path,
         batch_size = 32,
-        epochs = 4,
+        epochs = 4, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -345,7 +345,7 @@ def test_prism_g_cat_output_k2_auto_diff():
         layers = [8],
         local_grad_method = 'auto_diff',
         lambda_path = _LAMBDA_PATH_SHORT,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,), imp.shape
     assert np.all(imp >= 0)
@@ -359,7 +359,7 @@ def test_prism_g_cat_output_k3_auto_diff():
         layers = [8],
         local_grad_method = 'auto_diff',
         lambda_path = _LAMBDA_PATH_SHORT,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,), imp.shape
     assert np.all(imp >= 0)
@@ -373,7 +373,7 @@ def test_prism_g_cat_output_k5_auto_diff():
         layers = [8],
         local_grad_method = 'auto_diff',
         lambda_path = _LAMBDA_PATH_SHORT,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,), imp.shape
     assert np.all(imp >= 0)
@@ -391,7 +391,7 @@ def test_prism_g_cat_output_k3_bandwidth():
         layers = [8],
         local_grad_method = 'bandwidth',
         lambda_path = _LAMBDA_PATH_SHORT,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,), imp.shape
     assert np.all(imp >= 0)
@@ -409,7 +409,7 @@ def test_prism_g_cat_input_2cat():
         layers = [8],
         local_grad_method = 'auto_diff',
         lambda_path = _LAMBDA_PATH_SHORT,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (2 * p,), imp.shape
     assert np.all(imp >= 0)
@@ -423,7 +423,7 @@ def test_prism_g_cat_input_3cat():
         layers = [8],
         local_grad_method = 'auto_diff',
         lambda_path = _LAMBDA_PATH_SHORT,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (2 * p,), imp.shape
     assert np.all(imp >= 0)
@@ -437,7 +437,7 @@ def test_prism_g_cat_input_4cat():
         layers = [8],
         local_grad_method = 'auto_diff',
         lambda_path = _LAMBDA_PATH_SHORT,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (2 * p,), imp.shape
     assert np.all(imp >= 0)
@@ -458,7 +458,7 @@ def test_prism_w_cat_input_a_path():
         layers = [8],
         lambda_path = lambda_path,
         a_path = a_path,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (2 * p,), imp.shape
     assert np.all(imp >= 0)
@@ -476,7 +476,7 @@ def test_prism_g_cat_input_a_path():
         local_grad_method = 'auto_diff',
         lambda_path = lambda_path,
         a_path = a_path,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (2 * p,), imp.shape
     assert np.all(imp >= 0)
@@ -494,7 +494,7 @@ def test_prism_g_cat_input_cat_output_auto_diff():
         layers = [8],
         local_grad_method = 'auto_diff',
         lambda_path = _LAMBDA_PATH_SHORT,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (2 * p,), imp.shape
     assert np.all(imp >= 0)
@@ -508,7 +508,7 @@ def test_prism_g_cat_input_cat_output_bandwidth():
         layers = [8],
         local_grad_method = 'bandwidth',
         lambda_path = _LAMBDA_PATH_SHORT,
-        epochs = 3,
+        epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (2 * p,), imp.shape
     assert np.all(imp >= 0)
@@ -523,7 +523,7 @@ def test_prism_w_model_type_numeric(model_type):
     X, Xk, y = _make_synthetic(n=100, p=5)
     imp = importance.prismWImportances(
         X=X, Xk=Xk, y=y, layers=[16], model_type=model_type,
-        lambda_path=np.logspace(0, -1, 4), epochs=3,
+        lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -535,7 +535,7 @@ def test_prism_g_model_type_numeric(model_type):
     imp = importance.prismGImportances(
         X=X, Xk=Xk, y=y, layers=[16], model_type=model_type,
         local_grad_method="auto_diff",
-        lambda_path=np.logspace(0, -1, 4), epochs=3,
+        lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -548,7 +548,7 @@ def test_prism_w_model_type_cat_input(model_type):
     y = pl.Series("y", np.random.default_rng(30).standard_normal(100))
     imp = importance.prismWImportances(
         X=X, Xk=Xk, y=y, layers=[16], model_type=model_type,
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (2 * p,)
     assert np.all(imp >= 0)
@@ -561,7 +561,7 @@ def test_prism_g_model_type_cat_input(model_type):
     imp = importance.prismGImportances(
         X=X, Xk=Xk, y=y, layers=[16], model_type=model_type,
         local_grad_method="auto_diff",
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (2 * p,)
     assert np.all(imp >= 0)
@@ -638,7 +638,7 @@ def test_prism_w_count_outcome():
     imp = importance.prismWImportances(
         X=X, Xk=Xk, y=y, layers=[8],
         outcome_type='count',
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -651,7 +651,7 @@ def test_prism_g_count_outcome_auto_diff():
         X=X, Xk=Xk, y=y, layers=[8],
         outcome_type='count',
         local_grad_method='auto_diff',
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -664,7 +664,7 @@ def test_prism_g_count_outcome_bandwidth():
         X=X, Xk=Xk, y=y, layers=[8],
         outcome_type='count',
         local_grad_method='bandwidth',
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -679,7 +679,7 @@ def test_prism_w_cat_outcome():
     y = _make_cat_y(150, k=3, seed=43)
     imp = importance.prismWImportances(
         X=X, Xk=Xk, y=y, layers=[8],
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert imp.shape == (10,)
     assert np.all(imp >= 0)
@@ -695,7 +695,7 @@ def test_prism_g_local_gradients_numeric_auto_diff():
     grads = importance.prismGLocalGradients(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert grads.shape == (100, 5)
     assert np.isfinite(grads).all()
@@ -707,7 +707,7 @@ def test_prism_g_local_gradients_numeric_bandwidth():
     grads = importance.prismGLocalGradients(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='bandwidth',
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert grads.shape == (100, 5)
     assert np.isfinite(grads).all()
@@ -721,7 +721,7 @@ def test_prism_g_local_gradients_cat_input():
     grads = importance.prismGLocalGradients(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert grads.shape == (100, 6)
     assert np.isfinite(grads).all()
@@ -735,7 +735,7 @@ def test_prism_g_local_gradients_count_outcome():
         X=X, Xk=Xk, y=y, layers=[8],
         outcome_type='count',
         local_grad_method='auto_diff',
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert grads.shape == (100, 5)
     assert np.isfinite(grads).all()
@@ -751,7 +751,7 @@ def test_prism_gw_returns_tuple_of_two_arrays():
     result = importance.prismGWImportances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
-        lambda_path=np.logspace(0, -1, 4), epochs=3,
+        lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
     )
     assert isinstance(result, tuple) and len(result) == 2
     g_imp, w_imp = result
@@ -765,7 +765,7 @@ def test_prism_gw_shape_and_nonneg():
     g_imp, w_imp = importance.prismGWImportances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
-        lambda_path=np.logspace(0, -1, 4), epochs=3,
+        lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
     )
     assert g_imp.shape == (10,), g_imp.shape
     assert w_imp.shape == (10,), w_imp.shape
@@ -779,7 +779,7 @@ def test_prism_gw_bandwidth():
     g_imp, w_imp = importance.prismGWImportances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='bandwidth',
-        lambda_path=np.logspace(0, -1, 4), epochs=3,
+        lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
     )
     assert g_imp.shape == (10,)
     assert w_imp.shape == (10,)
@@ -793,7 +793,7 @@ def test_prism_gw_g_and_w_differ():
     g_imp, w_imp = importance.prismGWImportances(
         X=X, Xk=Xk, y=y, layers=[16, 8],
         local_grad_method='auto_diff',
-        lambda_path=np.logspace(0, -1, 5), epochs=4,
+        lambda_path=np.logspace(0, -1, 5), epochs = 4, n_warmup = 0,
     )
     assert not np.allclose(g_imp, w_imp), "PRISM_g and PRISM_w should differ"
 
@@ -804,7 +804,7 @@ def test_prism_gw_w_matches_standalone_prism_w_structure():
     _, w_imp = importance.prismGWImportances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
-        lambda_path=np.logspace(0, -1, 4), epochs=3,
+        lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
     )
     assert np.all(w_imp >= 0)
     assert np.isfinite(w_imp).all()
@@ -817,7 +817,7 @@ def test_prism_gw_cat_input():
     g_imp, w_imp = importance.prismGWImportances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert g_imp.shape == (2 * p,), g_imp.shape
     assert w_imp.shape == (2 * p,), w_imp.shape
@@ -832,7 +832,7 @@ def test_prism_gw_cat_output():
     g_imp, w_imp = importance.prismGWImportances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert g_imp.shape == (10,)
     assert w_imp.shape == (10,)
@@ -847,7 +847,7 @@ def test_prism_gw_count_outcome():
     g_imp, w_imp = importance.prismGWImportances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
-        lambda_path=_LAMBDA_PATH_SHORT, epochs=3,
+        lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
     assert g_imp.shape == (10,)
     assert w_imp.shape == (10,)
@@ -864,7 +864,7 @@ def test_prism_gw_snapshot_count_matches_lambda_stages():
     g_imp, w_imp = importance.prismGWImportances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
-        lambda_path=lambda_path, epochs=3,
+        lambda_path=lambda_path, epochs = 3, n_warmup = 0,
     )
     assert g_imp.shape == (10,)
     assert w_imp.shape == (10,)
@@ -938,3 +938,146 @@ def test_prism_setup_layout_matches_synth_sweep_shape():
     X, Xk, p = _make_mixed_X(n=64, p_numeric=20, cat_cols=[4] * 10, seed=99)
     y = pl.Series("y", np.random.default_rng(99).standard_normal(64))
     _assert_prism_setup_x_then_xk_layout(X, Xk, y)
+
+
+# ---------------------------------------------------------------------------
+# Flip-sign antisymmetry: W_j(swap_j[X,Xk]) == -W_j([X,Xk])
+#
+# Swapping ALL feature/knockoff pairs simultaneously (pass Xk as X and X as Xk)
+# with the SAME rng seed is the composition of swapping every individual j, so
+# it exercises the same coupled-randomness property the reference prism_g.py/
+# prism_w.py docstrings prove architecturally. This is an optimization-
+# dependent (not exactly-zero-tolerance) property -- it only holds once
+# training has moved enough beyond the shared random initialization for the
+# loss landscape's symmetry (rather than the arbitrary un-swapped initial
+# weights) to dominate -- so a strong single-signal column with enough
+# training is used, and the check is a sign flip + approximate magnitude
+# match rather than exact equality.
+# ---------------------------------------------------------------------------
+
+def _make_signal_XXk(seed: int, n: int = 300, p: int = 5):
+    """X_0 is the only signal; everything else is null."""
+    X = np.random.default_rng(seed).standard_normal((n, p))
+    Xk = np.random.default_rng(seed + 1).standard_normal((n, p))
+    y = X[:, 0] * 3 + np.random.default_rng(seed + 2).standard_normal(n) * 0.2
+    Xdf = pl.DataFrame({f"x{i}": X[:, i] for i in range(p)})
+    Xkdf = pl.DataFrame({f"x{i}": Xk[:, i] for i in range(p)})
+    return Xdf, Xkdf, pl.Series("y", y)
+
+
+_ANTISYM_LAMBDA_PATH = list(np.logspace(-1, -2, 20))
+
+
+def _assert_flip_sign(W: np.ndarray, W_swapped: np.ndarray, j: int = 0) -> None:
+    assert W[j] > 0, f"expected a strong positive W for the signal feature, got {W[j]}"
+    assert W_swapped[j] < 0, f"swap should flip the signal feature's sign, got {W_swapped[j]}"
+    assert abs(W_swapped[j] + W[j]) < 0.5 * abs(W[j]), (
+        f"swap should approximately negate: W={W[j]}, W_swapped={W_swapped[j]}"
+    )
+
+
+@pytest.mark.parametrize("model_type", ["mlp", "pairwise", "additive"])
+def test_prism_g_antisymmetry_continuous(model_type):
+    Xdf, Xkdf, yS = _make_signal_XXk(seed=100)
+    kwargs = dict(
+        layers=[8], epochs=300, n_warmup=1000,
+        model_type=model_type, lambda_path=_ANTISYM_LAMBDA_PATH,
+    )
+    imp = importance.prismGImportances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(99), **kwargs)
+    W = importance.wFromImportances(imp)
+
+    imp_sw = importance.prismGImportances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(99), **kwargs)
+    W_sw = importance.wFromImportances(imp_sw)
+
+    _assert_flip_sign(W, W_sw)
+
+
+@pytest.mark.parametrize("model_type", ["mlp", "pairwise", "additive"])
+def test_prism_w_antisymmetry_continuous(model_type):
+    Xdf, Xkdf, yS = _make_signal_XXk(seed=101)
+    kwargs = dict(
+        layers=[8], epochs=300, n_warmup=1000,
+        model_type=model_type, lambda_path=_ANTISYM_LAMBDA_PATH,
+    )
+    imp = importance.prismWImportances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(98), **kwargs)
+    W = importance.wFromImportances(imp)
+
+    imp_sw = importance.prismWImportances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(98), **kwargs)
+    W_sw = importance.wFromImportances(imp_sw)
+
+    _assert_flip_sign(W, W_sw)
+
+
+@pytest.mark.parametrize("model_type", ["mlp", "pairwise", "additive"])
+def test_prism_gw_antisymmetry_continuous(model_type):
+    """Both the G and W halves of prismGWImportances must flip sign under swap."""
+    Xdf, Xkdf, yS = _make_signal_XXk(seed=102)
+    kwargs = dict(
+        layers=[8], epochs=300, n_warmup=1000,
+        model_type=model_type, lambda_path=_ANTISYM_LAMBDA_PATH,
+    )
+    g_imp, w_imp = importance.prismGWImportances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(97), **kwargs)
+    g_imp_sw, w_imp_sw = importance.prismGWImportances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(97), **kwargs)
+
+    _assert_flip_sign(importance.wFromImportances(g_imp), importance.wFromImportances(g_imp_sw))
+    _assert_flip_sign(importance.wFromImportances(w_imp), importance.wFromImportances(w_imp_sw))
+
+
+def test_prism_g_antisymmetry_categorical_outcome():
+    """Flip-sign property with a categorical (multiclass) outcome."""
+    n, p = 300, 5
+    X = np.random.default_rng(103).standard_normal((n, p))
+    Xk = np.random.default_rng(104).standard_normal((n, p))
+    logits = X[:, 0] * 3
+    labels = (logits + np.random.default_rng(105).standard_normal(n) * 0.3 > 0).astype(int)
+    Xdf = pl.DataFrame({f"x{i}": X[:, i] for i in range(p)})
+    Xkdf = pl.DataFrame({f"x{i}": Xk[:, i] for i in range(p)})
+    yS = pl.Series("y", [str(v) for v in labels]).cast(pl.Categorical)
+
+    kwargs = dict(
+        layers=[8], epochs=300, n_warmup=1000,
+        model_type='mlp', lambda_path=_ANTISYM_LAMBDA_PATH,
+    )
+    imp = importance.prismGImportances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(96), **kwargs)
+    W = importance.wFromImportances(imp)
+
+    imp_sw = importance.prismGImportances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(96), **kwargs)
+    W_sw = importance.wFromImportances(imp_sw)
+
+    _assert_flip_sign(W, W_sw)
+
+
+# ---------------------------------------------------------------------------
+# wFromImportances — signed_max sign fix
+# ---------------------------------------------------------------------------
+
+def test_wFromImportances_signed_max_negates_knockoff_dominant():
+    """
+    signed_max must be antisymmetric like difference: when the knockoff
+    column's importance dominates, W_j must come out negative, not positive
+    (the pre-fix bug: W_out[j] = importances[j+p] instead of -importances[j+p]).
+    """
+    p = 3
+    # feature 0: original dominates -> W[0] > 0
+    # feature 1: knockoff dominates -> W[1] must be < 0 (this was the bug)
+    # feature 2: tie -> W[2] == 0
+    importances = np.array([5.0, 1.0, 2.0,   1.0, 4.0, 2.0])
+    W = importance.wFromImportances(importances, W_method='signed_max')
+    assert W.shape == (p,)
+    assert W[0] == 5.0
+    assert W[1] == -4.0, f"expected -4.0 (knockoff-dominant, negated), got {W[1]}"
+    assert W[2] == 0.0
+
+
+def test_wFromImportances_signed_max_matches_difference_sign():
+    """signed_max and difference must always agree on sign."""
+    rng = np.random.default_rng(200)
+    p = 20
+    importances = rng.uniform(0, 5, size=2 * p)
+    W_diff = importance.wFromImportances(importances, W_method='difference')
+    W_signed_max = importance.wFromImportances(importances, W_method='signed_max')
+    same_sign = np.sign(W_diff) == np.sign(W_signed_max)
+    assert same_sign.all(), (
+        f"difference and signed_max disagree on sign at indices "
+        f"{np.where(~same_sign)[0]}"
+    )

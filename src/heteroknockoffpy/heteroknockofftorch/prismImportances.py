@@ -122,11 +122,16 @@ def _prismImportances_t(
     drop_first: bool = True,
     inv_cov_t: torch.Tensor | None = None,
     cat_ohe_vals: dict[ int, tuple[ float, float ] ] | None = None,
-    bandwidth_exponent: float = 0.2,
     ) -> torch.Tensor:
     """
     Tensor-native PRISM importance computation. Returns shape (p_out,) tensor.
     model must have predict_t and auto_diff_t methods.
+
+    `bandwidth` is used exactly as given -- there is no sample-size- or
+    column-scale-derived auto-bandwidth. `X_all_t` is already standardized to
+    unit variance by the callers below, so bandwidth=1.0 (the proposal's
+    central difference at +/-1) is the natural default; re-deriving a
+    bandwidth from `n` on top of that would double-scale it.
     """
     n = X_all_t.shape[0]
     p_out = len( oheDict )
@@ -135,7 +140,10 @@ def _prismImportances_t(
         auto_diff_full_t: torch.Tensor = model.auto_diff_t( X_all_t )  # (n, p_ohe)
     elif local_grad_method == 'bandwidth':
         if bandwidth is None:
-            bandwidth = float( n ** -bandwidth_exponent )
+            raise ValueError(
+                "local_grad_method='bandwidth' requires an explicit bandwidth "
+                "(no auto-scaling from n is applied)."
+            )
     else:
         raise ValueError( "Unrecognized local_grad_method='{}'".format( local_grad_method ) )
     #
@@ -340,7 +348,51 @@ def _prism_setup(
 #/def _prism_setup
 
 
-_DEFAULT_LAMBDA_PATH: np.ndarray = np.logspace( 1, -2, 50 )
+_DEFAULT_N_BLOCKS:    int   = 30
+_LAMBDA_LOGUNIF_LOW:  float = 1e-3
+_LAMBDA_LOGUNIF_HIGH: float = 1e-1
+_A_UNIF_LOW:          float = 0.3
+_A_UNIF_HIGH:         float = 1.0
+
+
+def _resolve_lambda_a_path(
+    lambda_path: Sequence[ float ] | None,
+    a_path: Sequence[ float ] | None,
+    rng: np.random.Generator | None,
+    n_blocks: int = _DEFAULT_N_BLOCKS,
+    ) -> tuple[ list[float], list[float] ]:
+    """
+    Resolve the (lambda_path, a_path) BSS schedule per the PRISM proposal's Monte
+    Carlo scheme: lambda_b ~ LogUniform(1e-3, 1e-1), a_b ~ Uniform(0.3, 1), drawn
+    INDEPENDENTLY per block -- not a_b = lambda_b (the old mirroring default let
+    a > 1 slip through whenever lambda_path ranged above 1).
+
+    A `def` default can't itself express "sample fresh values each call" -- so
+    lambda_path=None / a_path=None are handled dynamically here rather than as a
+    fixed array: omitting either triggers a new random draw from `rng`
+    (np.random.default_rng() if rng is None) at call time. Callers who want a
+    reproducible, inspectable path should draw one themselves (mirroring the
+    LogUniform/Uniform formulas above) and pass it in explicitly rather than
+    relying on this default. a_path=None always draws independently at the
+    resolved lambda_path's length, even when lambda_path was supplied explicitly.
+    """
+    _rng = rng if rng is not None else np.random.default_rng()
+
+    if lambda_path is None:
+        log_low, log_high = np.log10( _LAMBDA_LOGUNIF_LOW ), np.log10( _LAMBDA_LOGUNIF_HIGH )
+        _lp = list( 10.0 ** _rng.uniform( log_low, log_high, size=n_blocks ) )
+    else:
+        _lp = list( lambda_path )
+    #
+
+    if a_path is None:
+        _ap = list( _rng.uniform( _A_UNIF_LOW, _A_UNIF_HIGH, size=len( _lp ) ) )
+    else:
+        _ap = list( a_path )
+    #
+
+    return _lp, _ap
+#/def _resolve_lambda_a_path
 
 
 def prismWImportances(
@@ -351,10 +403,11 @@ def prismWImportances(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
+    n_blocks: int = _DEFAULT_N_BLOCKS,
     batch_size: int | None = None,
     epochs: int = 500,
-    model_type: str = 'pairwise',
-    n_warmup: int = 0,
+    model_type: str = 'mlp',
+    n_warmup: int = 5000,
     vertical_prefit: bool = False,
     prefit_noise_std: float = 0.01,
     reset_optimizer: bool = True,
@@ -363,6 +416,7 @@ def prismWImportances(
     dense_activation: str = 'relu',
     verbose: int = 0,
     weight: np.ndarray | None = None,
+    rng: np.random.Generator | None = None,
     ) -> np.ndarray:
     """
     PRISM-W importances: average of group-norm snapshots over a lambda regularization path.
@@ -373,16 +427,23 @@ def prismWImportances(
 
     :param model_type: see torchImportances.PRISMPredictionModel docstring for the full
         list ('mlp', 'pairwise', 'additive').
-    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
-    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
+    :param lambda_path: Sequence of lambda values. If None (default), a fresh path of
+        `n_blocks` values is drawn from LogUniform(1e-3, 1e-1) via `rng` at call time --
+        see `_resolve_lambda_a_path`. Pass an explicit sequence for a reproducible,
+        inspectable path instead of relying on this dynamic default.
+    :param a_path: Per-stage input-layer penalty values. If None (default), drawn
+        independently from Uniform(0.3, 1) via `rng`, at the same length as the
+        resolved `lambda_path` (NOT mirrored from lambda_path's values).
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
+        Ignored if `lambda_path` is given explicitly.
     :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
+    :param rng: Seeds both the default lambda/a-path draw above and torch's global RNG
+        (via `PRISMPredictionModel`) for full run-to-run reproducibility. Unseeded if omitted.
     :returns: Array of shape (2*p,) — first p entries for X, last p for Xk.
     """
     from . import torchImportances
 
-    if lambda_path is None:
-        lambda_path = _DEFAULT_LAMBDA_PATH
-    #
+    lambda_path, a_path = _resolve_lambda_a_path( lambda_path, a_path, rng, n_blocks )
 
     X_all_np, y_np, groups, oheDict, loss_func, output_dimension, _ = _prism_setup(
         X = X, Xk = Xk, y = y,
@@ -409,6 +470,7 @@ def prismWImportances(
         prefit_noise_std = prefit_noise_std,
         reset_optimizer = reset_optimizer,
         verbose = verbose,
+        rng = rng,
     )
 
     snapshots: list[ np.ndarray ] = predictionModel.fit(
@@ -433,10 +495,11 @@ def prismWImportancesPerOHE(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
+    n_blocks: int = _DEFAULT_N_BLOCKS,
     batch_size: int | None = None,
     epochs: int = 500,
     model_type: Literal['mlp','pairwise',] = 'mlp',
-    n_warmup: int = 0,
+    n_warmup: int = 5000,
     vertical_prefit: bool = False,
     prefit_noise_std: float = 0.01,
     reset_optimizer: bool = True,
@@ -445,6 +508,7 @@ def prismWImportancesPerOHE(
     dense_activation: str = 'relu',
     verbose: int = 0,
     weight: np.ndarray | None = None,
+    rng: np.random.Generator | None = None,
     ) -> np.ndarray:
     """
     PRISM-W importances, but every OHE dummy column is treated as its own independent
@@ -460,9 +524,15 @@ def prismWImportancesPerOHE(
     a per-dummy treatment.
 
     :param model_type: 'mlp' or 'pairwise' only.
-    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
-    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
+    :param lambda_path: Sequence of lambda values. See `prismWImportances`'s docstring --
+        if None (default), a fresh path of `n_blocks` values is drawn from
+        LogUniform(1e-3, 1e-1) via `rng` at call time.
+    :param a_path: Per-stage input-layer penalty values. If None, drawn independently
+        from Uniform(0.3, 1) via `rng`, at the resolved lambda_path's length.
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
     :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
+    :param rng: Seeds the default lambda/a-path draw and torch's global RNG for full
+        run-to-run reproducibility. Unseeded if omitted.
     :returns: Array of shape (2*p_ohe,) — first p_ohe entries for X's OHE-expanded columns,
         last p_ohe for Xk's. p_ohe is the total OHE-expanded width per side (numeric columns
         contribute 1 entry each, a K-category column contributes K-1 entries under
@@ -477,9 +547,7 @@ def prismWImportancesPerOHE(
         )
     #
 
-    if lambda_path is None:
-        lambda_path = _DEFAULT_LAMBDA_PATH
-    #
+    lambda_path, a_path = _resolve_lambda_a_path( lambda_path, a_path, rng, n_blocks )
 
     X_all_np, y_np, _grouped_groups, oheDict, loss_func, output_dimension, _ = _prism_setup(
         X = X, Xk = Xk, y = y,
@@ -518,6 +586,7 @@ def prismWImportancesPerOHE(
         prefit_noise_std = prefit_noise_std,
         reset_optimizer = reset_optimizer,
         verbose = verbose,
+        rng = rng,
     )
 
     snapshots: list[ np.ndarray ] = predictionModel.fit(
@@ -540,15 +609,16 @@ def prismGImportances(
     y: SeriesOrDataFrameLike,
     layers: Sequence[ int ],
     outcome_type: Literal['continuous','count','categorical',] | None = None,
-    local_grad_method: Literal['auto_diff','bandwidth'] = 'auto_diff',
+    local_grad_method: Literal['auto_diff','bandwidth'] = 'bandwidth',
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
+    n_blocks: int = _DEFAULT_N_BLOCKS,
     batch_size: int | None = None,
     epochs: int = 500,
-    bandwidth: float | None = None,
+    bandwidth: float | None = 1.0,
     exponent: float = 1.0,
-    model_type: str = 'pairwise',
-    n_warmup: int = 0,
+    model_type: str = 'mlp',
+    n_warmup: int = 5000,
     vertical_prefit: bool = False,
     prefit_noise_std: float = 0.01,
     reset_optimizer: bool = True,
@@ -556,8 +626,8 @@ def prismGImportances(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
-    bandwidth_exponent: float = 0.2,
     weight: np.ndarray | None = None,
+    rng: np.random.Generator | None = None,
     ) -> np.ndarray:
     """
     PRISM-G importances: average of PRISM local-gradient snapshots over a lambda path.
@@ -568,17 +638,29 @@ def prismGImportances(
 
     :param model_type: see torchImportances.PRISMPredictionModel docstring for the full
         list ('mlp', 'pairwise', 'additive').
-    :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite difference).
-    :param lambda_path: Sequence of lambda values. Defaults to logspace(1,-2,50).
-    :param a_path: Per-stage input-layer penalty values. If None, uses lambda_path values.
+    :param local_grad_method: 'auto_diff' (exact autodiff gradient) or 'bandwidth'
+        (finite difference). Default 'bandwidth', matching the proposal's central
+        difference statistic exactly once combined with `bandwidth=1.0` below -- X
+        is already standardized to unit variance before this step, so a bandwidth of
+        1.0 IS the proposal's "central difference at +/-1."
+    :param lambda_path: Sequence of lambda values. See `prismWImportances`'s docstring --
+        if None (default), a fresh path of `n_blocks` values is drawn from
+        LogUniform(1e-3, 1e-1) via `rng` at call time.
+    :param a_path: Per-stage input-layer penalty values. If None, drawn independently
+        from Uniform(0.3, 1) via `rng`, at the resolved lambda_path's length.
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
     :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
-    :param bandwidth: Bandwidth for finite-difference approximation (auto-set if None).
+    :param bandwidth: Bandwidth for the finite-difference approximation when
+        `local_grad_method='bandwidth'`. Used exactly as given -- there is no
+        auto-scaling from `n` or column std on top of it. Default `1.0`.
     :param exponent: Power applied to each local gradient value before averaging.
-    :param bandwidth_exponent: Exponent used for the auto-set bandwidth (n ** -bandwidth_exponent)
-        when bandwidth is None. Ignored if bandwidth is given explicitly.
+    :param rng: Seeds the default lambda/a-path draw and torch's global RNG for full
+        run-to-run reproducibility. Unseeded if omitted.
     :returns: Array of shape (2*p,).
     """
     from . import torchImportances
+
+    lambda_path, a_path = _resolve_lambda_a_path( lambda_path, a_path, rng, n_blocks )
 
     X_all_np, y_np, groups, oheDict, loss_func, output_dimension, outcomeDescriptor = _prism_setup(
         X = X, Xk = Xk, y = y,
@@ -615,6 +697,7 @@ def prismGImportances(
         prefit_noise_std = prefit_noise_std,
         reset_optimizer = reset_optimizer,
         verbose = verbose,
+        rng = rng,
     )
 
     if outcomeDescriptor.outcome_type == 'categorical':
@@ -645,7 +728,6 @@ def prismGImportances(
                     drop_first = drop_first,
                     inv_cov_t = inv_cov_t,
                     cat_ohe_vals = cat_ohe_vals,
-                    bandwidth_exponent = bandwidth_exponent,
                 ).cpu().numpy()
             #
         #/def snapshot_fn
@@ -660,7 +742,6 @@ def prismGImportances(
                 exponent = exponent,
                 drop_first = drop_first,
                 cat_ohe_vals = cat_ohe_vals,
-                bandwidth_exponent = bandwidth_exponent,
             ).cpu().numpy()
         #/def snapshot_fn
     #
@@ -686,15 +767,16 @@ def prismGWImportances(
     y: SeriesOrDataFrameLike,
     layers: Sequence[ int ],
     outcome_type: Literal['continuous','count','categorical',] | None = None,
-    local_grad_method: Literal['auto_diff','bandwidth'] = 'auto_diff',
+    local_grad_method: Literal['auto_diff','bandwidth'] = 'bandwidth',
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
+    n_blocks: int = _DEFAULT_N_BLOCKS,
     batch_size: int | None = None,
     epochs: int = 500,
-    bandwidth: float | None = None,
+    bandwidth: float | None = 1.0,
     exponent: float = 1.0,
-    model_type: str = 'pairwise',
-    n_warmup: int = 0,
+    model_type: str = 'mlp',
+    n_warmup: int = 5000,
     vertical_prefit: bool = False,
     prefit_noise_std: float = 0.01,
     reset_optimizer: bool = True,
@@ -702,8 +784,8 @@ def prismGWImportances(
     drop_first: bool = True,
     dense_activation: str = 'relu',
     verbose: int = 0,
-    bandwidth_exponent: float = 0.2,
     weight: np.ndarray | None = None,
+    rng: np.random.Generator | None = None,
     ) -> tuple[ np.ndarray, np.ndarray ]:
     """
     PRISM-G and PRISM-W importances from a single training pass.
@@ -714,15 +796,19 @@ def prismGWImportances(
 
     :param model_type: see torchImportances.PRISMPredictionModel docstring for the full
         list ('mlp', 'pairwise', 'additive').
-    :param bandwidth_exponent: Exponent used for the auto-set bandwidth (n ** -bandwidth_exponent)
-        when bandwidth is None. Ignored if bandwidth is given explicitly.
+    :param local_grad_method: See `prismGImportances`. Default 'bandwidth'.
+    :param bandwidth: Used exactly as given, no auto-scaling from `n`. Default `1.0`,
+        matching the proposal's central difference at +/-1 on standardized X.
+    :param lambda_path: See `prismWImportances` -- if None, drawn from
+        LogUniform(1e-3, 1e-1) via `rng`.
+    :param a_path: If None, drawn independently from Uniform(0.3, 1) via `rng`.
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
+    :param rng: Seeds the default lambda/a-path draw and torch's global RNG.
     :returns: (g_importances, w_importances) both of shape (2*p,).
     """
     from . import torchImportances
 
-    if lambda_path is None:
-        lambda_path = _DEFAULT_LAMBDA_PATH
-    #
+    lambda_path, a_path = _resolve_lambda_a_path( lambda_path, a_path, rng, n_blocks )
 
     X_all_np, y_np, groups, oheDict, loss_func, output_dimension, outcomeDescriptor = _prism_setup(
         X = X, Xk = Xk, y = y,
@@ -759,6 +845,7 @@ def prismGWImportances(
         prefit_noise_std = prefit_noise_std,
         reset_optimizer = reset_optimizer,
         verbose = verbose,
+        rng = rng,
     )
 
     w_snapshots: list[ np.ndarray ] = []
@@ -792,7 +879,6 @@ def prismGWImportances(
                     drop_first = drop_first,
                     inv_cov_t = inv_cov_t,
                     cat_ohe_vals = cat_ohe_vals,
-                    bandwidth_exponent = bandwidth_exponent,
                 ).cpu().numpy()
             #
         #/def snapshot_fn
@@ -808,7 +894,6 @@ def prismGWImportances(
                 exponent = exponent,
                 drop_first = drop_first,
                 cat_ohe_vals = cat_ohe_vals,
-                bandwidth_exponent = bandwidth_exponent,
             ).cpu().numpy()
         #/def snapshot_fn
     #
@@ -834,6 +919,8 @@ def _get_localGrad_ohe_matrix_t(
     x_oheDict:         dict,
     local_grad_method: str,
     bandwidth:         float | None,
+    output_dimension:  int = 1,
+    cat_ohe_vals:      dict[ int, tuple[ float, float ] ] | None = None,
     ) -> torch.Tensor:
     """
     Per-sample local gradient matrix for X-only features (not Xk).
@@ -844,7 +931,32 @@ def _get_localGrad_ohe_matrix_t(
 
     x_oheDict: oheDict filtered to X columns only (keys without '~').
     Returns tensor of shape (n, p_ohe_x) where p_ohe_x = p_numeric + sum(c_k - 1).
+
+    `bandwidth` is used exactly as given -- no auto-scaling from `n`, matching
+    `_prismImportances_t`.
+
+    `cat_ohe_vals`: per-OHE-column-index (0.0-value, 1.0-value) pair, standardized
+    the same way as `prismGImportances`'s `cat_ohe_vals` -- required whenever
+    `X_all_t` has been standardized (its 0/1 dummy encoding no longer literally
+    means 0.0/1.0), so the categorical branch below evaluates the reference/active
+    states at the correct standardized values instead of raw 0.0/1.0. `None` keeps
+    the legacy raw-0.0/1.0 behavior, for callers that pass unstandardized input.
+
+    Only `output_dimension == 1` (continuous/count outcomes) is supported: for a
+    multiclass outcome, `model.predict_t` returns (n, k) logits per sample, and
+    there is no established single-column reduction of that into this function's
+    (n, p_ohe_x) per-sample-scalar-gradient contract (unlike prismGImportances,
+    which aggregates via a Mahalanobis distance into one importance number).
     """
+    if output_dimension != 1:
+        raise NotImplementedError(
+            "_get_localGrad_ohe_matrix_t only supports output_dimension=1 "
+            "(continuous/count outcomes); got output_dimension={}. Categorical "
+            "outcomes have no established per-sample scalar-gradient reduction "
+            "here.".format( output_dimension )
+        )
+    #
+
     n = X_all_t.shape[0]
     p_ohe = sum( 1 if isinstance( v, int ) else len( v ) for v in x_oheDict.values() )
 
@@ -852,7 +964,10 @@ def _get_localGrad_ohe_matrix_t(
         auto_diff_full_t: torch.Tensor = model.auto_diff_t( X_all_t )  # (n, p_all_ohe)
     elif local_grad_method == 'bandwidth':
         if bandwidth is None:
-            bandwidth = float( n ** -0.2 )
+            raise ValueError(
+                "local_grad_method='bandwidth' requires an explicit bandwidth "
+                "(no auto-scaling from n is applied)."
+            )
     else:
         raise ValueError( "Unrecognized local_grad_method='{}'".format( local_grad_method ) )
 
@@ -874,14 +989,18 @@ def _get_localGrad_ohe_matrix_t(
         else:
             # categorical — c-1 contrast columns (category 0 = reference, dropped)
             cat_indices = list( col_idx )  # OHE col indices for categories 1..c-1
-            # reference: set all OHE bits for this variable to 0 (implicit category 0)
+            _ref_val = ( lambda k: cat_ohe_vals[ k ][ 0 ] ) if cat_ohe_vals is not None else ( lambda k: 0.0 )
+            _act_val = ( lambda k: cat_ohe_vals[ k ][ 1 ] ) if cat_ohe_vals is not None else ( lambda k: 1.0 )
+            # reference: set all OHE bits for this variable to their "0" value (implicit category 0)
             X_ref = X_all_t.clone()
-            X_ref[ :, cat_indices ] = 0.0
+            for k in cat_indices:
+                X_ref[ :, k ] = _ref_val( k )
             pred_ref = model.predict_t( X_ref ).reshape( n )  # (n,)
             for ohe_col in cat_indices:
                 X_j = X_all_t.clone()
-                X_j[ :, cat_indices ] = 0.0
-                X_j[ :, ohe_col      ] = 1.0
+                for k in cat_indices:
+                    X_j[ :, k ] = _ref_val( k )
+                X_j[ :, ohe_col ] = _act_val( ohe_col )
                 pred_j = model.predict_t( X_j ).reshape( n )
                 grad_t[ :, out_col ] = pred_j - pred_ref
                 out_col += 1
@@ -901,11 +1020,12 @@ def prismGLocalGradients(
     local_grad_method: Literal["auto_diff","bandwidth"] = 'bandwidth',
     lambda_path:       Sequence[float] | None = None,
     a_path:            Sequence[float] | None = None,
+    n_blocks:          int = _DEFAULT_N_BLOCKS,
     batch_size:        int | None = None,
     epochs:            int = 500,
-    bandwidth:         float | None = None,
-    model_type:        str = 'pairwise',
-    n_warmup:          int = 0,
+    bandwidth:         float | None = 1.0,
+    model_type:        str = 'mlp',
+    n_warmup:          int = 5000,
     vertical_prefit:   bool = False,
     prefit_noise_std:  float = 0.01,
     reset_optimizer:   bool = True,
@@ -914,6 +1034,7 @@ def prismGLocalGradients(
     dense_activation:  str = 'relu',
     verbose:           int = 0,
     weight:            np.ndarray | None = None,
+    rng:               np.random.Generator | None = None,
     ) -> np.ndarray:
     """
     Train a PRISM-G network on (X, Xk, y) and return the per-sample local gradient
@@ -924,6 +1045,15 @@ def prismGLocalGradients(
     Numeric columns: bandwidth or auto_diff gradient.
     Categorical columns (c-1 per variable): model-prediction contrast vs. category 0
       (drop_first=True convention — category 0 is the implicit reference).
+
+    Only continuous/count outcomes are supported (see `_get_localGrad_ohe_matrix_t`);
+    a `categorical` outcome_type raises `NotImplementedError` before training, since
+    there's no established reduction of a multiclass model's (n, k) logits into this
+    function's (n, p_ohe_x) per-sample-scalar-gradient contract.
+
+    `lambda_path`/`a_path`/`bandwidth`/`rng` follow the same conventions as
+    `prismGImportances` -- see that docstring. X is standardized the same way as
+    `prismGImportances`/`prismGWImportances` before the local-gradient step.
     """
     from . import torchImportances
 
@@ -935,6 +1065,33 @@ def prismGLocalGradients(
         outcome_type = outcome_type,
         drop_first   = drop_first,
     )
+
+    if outcomeDescriptor.outcome_type == 'categorical':
+        raise NotImplementedError(
+            "prismGLocalGradients does not support categorical outcomes -- "
+            "see _get_localGrad_ohe_matrix_t's docstring."
+        )
+    #
+
+    lambda_path, a_path = _resolve_lambda_a_path( lambda_path, a_path, rng, n_blocks )
+
+    _mu = X_all_np.mean( axis=0 )
+    _sd = np.maximum( X_all_np.std( axis=0 ), 1e-8 )
+    X_all_np = ( X_all_np - _mu ) / _sd
+
+    # Standardized reference/active values for each categorical OHE column, so the
+    # categorical branch of _get_localGrad_ohe_matrix_t evaluates at the correct
+    # (standardized) 0/1 states instead of raw 0.0/1.0 -- same construction as
+    # prismGImportances/prismGWImportances.
+    cat_ohe_vals: dict[ int, tuple[ float, float ] ] = {}
+    for _col_idx in oheDict.values():
+        if not isinstance( _col_idx, int ):
+            for k in _col_idx:
+                cat_ohe_vals[ k ] = (
+                    float( ( 0.0 - _mu[ k ] ) / _sd[ k ] ),
+                    float( ( 1.0 - _mu[ k ] ) / _sd[ k ] ),
+                )
+    #
 
     predictionModel: torchImportances.PRISMPredictionModel = torchImportances.PRISMPredictionModel(
         input_size       = X_all_np.shape[1],
@@ -950,6 +1107,7 @@ def prismGLocalGradients(
         prefit_noise_std = prefit_noise_std,
         reset_optimizer  = reset_optimizer,
         verbose          = verbose,
+        rng              = rng,
     )
 
     predictionModel.fit(
@@ -973,6 +1131,8 @@ def prismGLocalGradients(
         x_oheDict         = x_oheDict,
         local_grad_method = local_grad_method,
         bandwidth         = bandwidth,
+        output_dimension  = output_dimension,
+        cat_ohe_vals      = cat_ohe_vals,
     )
 
     return grad_t.cpu().numpy()
