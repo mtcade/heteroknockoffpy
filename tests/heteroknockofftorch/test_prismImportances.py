@@ -1081,3 +1081,273 @@ def test_wFromImportances_signed_max_matches_difference_sign():
         f"difference and signed_max disagree on sign at indices "
         f"{np.where(~same_sign)[0]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# calibrate / n_blocks / lambda_min / lambda_max / a_min / a_max
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("conflicting_kwarg", [
+    {"lambda_path": [0.1, 0.01]},
+    {"a_path": [0.5, 0.6]},
+    {"lambda_min": 1e-4},
+    {"lambda_max": 1e-1},
+    {"a_min": 0.2},
+    {"a_max": 0.9},
+])
+def test_calibrate_conflicts_with_explicit_path_params(conflicting_kwarg):
+    """calibrate=True must raise ValueError if the caller also supplies any
+    of the parameters calibration itself determines."""
+    X, Xk, y = _make_synthetic()
+    with pytest.raises(ValueError, match="calibrate=True determines"):
+        importance.prismWImportances(
+            X=X, Xk=Xk, y=y, layers=[8],
+            calibrate=True, epochs=3, n_warmup=0,
+            **conflicting_kwarg,
+        )
+
+
+@pytest.mark.parametrize("path_kwarg", [
+    {"lambda_path": [0.1, 0.01]},
+    {"a_path": [0.5, 0.6]},
+])
+def test_n_blocks_conflicts_with_explicit_path(path_kwarg):
+    """n_blocks only means something when a path is auto-generated -- must
+    raise ValueError if combined with an explicit lambda_path/a_path,
+    calibrate or not."""
+    X, Xk, y = _make_synthetic()
+    with pytest.raises(ValueError, match="n_blocks only applies"):
+        importance.prismWImportances(
+            X=X, Xk=Xk, y=y, layers=[8],
+            n_blocks=5, epochs=3, n_warmup=0,
+            **path_kwarg,
+        )
+
+
+def test_calibrate_lambda_range_matches_measured_gradient_ratio():
+    """_calibrate_lambda_range's returned (lambda_min, lambda_max) must satisfy
+    lambda_min == r_min / ratio_avg and lambda_max == r_max / ratio_avg, where
+    ratio_avg is the SAME quantity independently re-derived here via a second,
+    separate autograd computation -- proves the calibration formula itself is
+    correct, not just that fit(calibrate=True) runs without crashing."""
+    import torch
+    from heteroknockoffpy.heteroknockofftorch.torchImportances import PRISMPredictionModel
+
+    rng = np.random.default_rng(7)
+    n, p = 150, 6
+    X_np = rng.standard_normal((n, p)).astype(np.float32)
+    Xk_np = rng.standard_normal((n, p)).astype(np.float32)
+    y_np = (X_np[:, 0] * 2 + rng.standard_normal(n) * 0.5).astype(np.float32)
+    groups = [[i] for i in range(2 * p)]
+    X_all_np = np.concatenate([X_np, Xk_np], axis=1)
+
+    model = PRISMPredictionModel(
+        input_size=2 * p, layers=[8], model_type='mlp',
+        n_warmup=100, warmup_patience=0,
+        rng=np.random.default_rng(7),
+    )
+    X_tensor = torch.tensor(X_all_np).to(model.device)
+    y_tensor = torch.tensor(y_np).to(model.device)
+
+    # Warm up exactly as fit() would, so the model is at the same near-
+    # converged state the real calibration pilot pass measures at.
+    model.model._precompute_group_reg(groups, model.device)
+    warmup_opt = torch.optim.Adam(model.model.parameters(), lr=model.learning_rate)
+    model.model.train()
+    for _ in range(100):
+        loss = torch.nn.functional.mse_loss(model.model(X_tensor), y_tensor)
+        warmup_opt.zero_grad(); loss.backward(); warmup_opt.step()
+
+    a_path = [0.4, 0.6, 0.8]
+    r_min, r_max = 0.01, 0.5
+    lambda_min, lambda_max = model._calibrate_lambda_range(
+        X_tensor, y_tensor, groups, None, a_path=a_path, r_min=r_min, r_max=r_max,
+    )
+
+    # Independently re-derive ratio_avg the same way, via a fresh set of
+    # autograd calls (not reusing any internal state from the call above).
+    params = list(model.model.group_parameters())
+    pred = model.model(X_tensor)
+    loss = torch.nn.functional.mse_loss(pred, y_tensor)
+    grad_L = torch.autograd.grad(loss, params)
+    grad_L_norm = torch.sqrt(sum(g.pow(2).sum() for g in grad_L))
+    ratios = []
+    for a_b in a_path:
+        R = model.model.group_regularization(1.0, a_b, groups)
+        grad_R = torch.autograd.grad(R, params)
+        grad_R_norm = torch.sqrt(sum(g.pow(2).sum() for g in grad_R))
+        ratios.append((grad_R_norm / grad_L_norm).item())
+    ratio_avg = sum(ratios) / len(ratios)
+
+    assert lambda_min == pytest.approx(r_min / ratio_avg, rel=1e-4)
+    assert lambda_max == pytest.approx(r_max / ratio_avg, rel=1e-4)
+    assert 0.0 < lambda_min < lambda_max
+
+
+def test_lambda_min_max_change_sampled_range():
+    """lambda_min/lambda_max (calibrate=False) should change the range
+    lambda_path is drawn from, relative to the hardcoded module defaults."""
+    from heteroknockoffpy.heteroknockofftorch.prismImportances import _resolve_lambda_a_path
+
+    rng = np.random.default_rng(3)
+    lp_default, _ = _resolve_lambda_a_path(None, None, rng, n_blocks=200)
+    rng2 = np.random.default_rng(3)
+    lp_narrow, _ = _resolve_lambda_a_path(
+        None, None, rng2, n_blocks=200, lambda_min=10.0, lambda_max=20.0,
+    )
+    assert min(lp_narrow) >= 10.0 and max(lp_narrow) <= 20.0
+    assert not (min(lp_default) >= 10.0)
+
+
+def test_a_min_max_change_sampled_range():
+    from heteroknockoffpy.heteroknockofftorch.prismImportances import _resolve_lambda_a_path
+
+    rng = np.random.default_rng(3)
+    _, ap_narrow = _resolve_lambda_a_path(
+        None, None, rng, n_blocks=200, a_min=0.05, a_max=0.09,
+    )
+    assert min(ap_narrow) >= 0.05 and max(ap_narrow) <= 0.09
+
+
+# ---------------------------------------------------------------------------
+# Group-size normalization + zero-anchored range importance (categorical groups)
+# ---------------------------------------------------------------------------
+
+def test_group_regularization_size_normalized():
+    """A K-column categorical group and a 1-column numeric singleton with the
+    same per-column weight magnitude must receive the same regularization
+    penalty. Before the group-size normalization fix, the K-column group's
+    raw (summed, not averaged) grp_sq made it K^(a/2)x harder-penalized than
+    the singleton."""
+    import torch
+    import torch.nn as nn
+    from heteroknockoffpy.heteroknockofftorch.torchImportances import _PRISMNetworkMLP
+
+    torch.manual_seed(0)
+    a = 0.7
+
+    singleton = _PRISMNetworkMLP(input_size=1, layers=[4], activation_class=nn.ReLU, output_size=1)
+    singleton._precompute_group_reg([[0]], device='cpu')
+    with torch.no_grad():
+        singleton.net[0].weight.zero_()
+        singleton.net[0].weight[0, 0] = 2.0
+    R_singleton = singleton.group_regularization(1.0, a, [[0]])
+
+    grouped = _PRISMNetworkMLP(input_size=2, layers=[4], activation_class=nn.ReLU, output_size=1)
+    grouped._precompute_group_reg([[0, 1]], device='cpu')
+    with torch.no_grad():
+        grouped.net[0].weight.zero_()
+        grouped.net[0].weight[0, 0] = 2.0
+        grouped.net[0].weight[0, 1] = 2.0
+    R_grouped = grouped.group_regularization(1.0, a, [[0, 1]])
+
+    assert R_grouped.item() == pytest.approx(R_singleton.item(), rel=1e-4)
+
+
+def test_range_importance_helper_sign_regimes():
+    """_range_importance's zero-anchored spread: singleton passes through
+    unchanged; an all-nonnegative group reduces to its max (min clamped to
+    0); an all-nonpositive group reduces to |min| (max clamped to 0); a
+    mixed-sign group is the ordinary max - min range."""
+    import torch
+    from heteroknockoffpy.heteroknockofftorch.torchImportances import _range_importance
+
+    assert _range_importance(torch.tensor([-3.0])) == pytest.approx(-3.0)
+    assert _range_importance(torch.tensor([1.0, 5.0, 3.0])) == pytest.approx(5.0)
+    assert _range_importance(torch.tensor([-1.0, -5.0, -3.0])) == pytest.approx(5.0)
+    assert _range_importance(torch.tensor([-2.0, 4.0, 1.0])) == pytest.approx(6.0)
+
+
+def test_get_group_importances_categorical_collapse_method():
+    """get_group_importances's categorical_collapse_method switch: 'l2_norm'
+    (default) returns the Frobenius/L2 norm of the whole group's weight
+    block; 'range' returns the zero-anchored max-min range over its columns'
+    L2 norms instead. A numeric singleton returns its own column norm
+    unchanged under either method."""
+    import torch
+    import torch.nn as nn
+    from heteroknockoffpy.heteroknockofftorch.torchImportances import _PRISMNetworkMLP
+
+    torch.manual_seed(0)
+    model = _PRISMNetworkMLP(input_size=4, layers=[4], activation_class=nn.ReLU, output_size=1)
+    groups = [[0], [1, 2, 3]]
+    with torch.no_grad():
+        w = model.net[0].weight  # (4, 4)
+        w.zero_()
+        w[0, 0] = 2.0                              # singleton column norm = 2.0
+        w[0, 1], w[0, 2], w[0, 3] = 1.0, 5.0, 3.0   # categorical columns' norms
+
+    frobenius_norm = (1.0 ** 2 + 5.0 ** 2 + 3.0 ** 2) ** 0.5
+
+    imp_default = model.get_group_importances(groups)
+    assert imp_default[0] == pytest.approx(2.0)
+    assert imp_default[1] == pytest.approx(frobenius_norm)
+
+    imp_l2 = model.get_group_importances(groups, categorical_collapse_method='l2_norm')
+    assert imp_l2[0] == pytest.approx(2.0)
+    assert imp_l2[1] == pytest.approx(frobenius_norm)
+
+    imp_range = model.get_group_importances(groups, categorical_collapse_method='range')
+    assert imp_range[0] == pytest.approx(2.0)
+    assert imp_range[1] == pytest.approx(5.0)
+    assert imp_range[1] != pytest.approx(frobenius_norm)
+
+
+# ---------------------------------------------------------------------------
+# Warmup best-checkpoint restoration
+# ---------------------------------------------------------------------------
+
+def test_warmup_restores_best_checkpoint_not_final_step():
+    """Warmup's patience mechanism tracks a best val loss but must also
+    restore the model weights at that best point, not leave the model at
+    whatever (possibly-overfit) state training happens to reach at the
+    n_warmup step cap. Engineers a clear overfit-then-plateau scenario (tiny
+    n, wide MLP, long warmup, patience set high enough to never trigger so
+    the loop always hits the step cap) and spies on _eval_loss to confirm the
+    final (post-warmup) val loss equals the best one observed during
+    training, not a later, worse one."""
+    import torch
+    from heteroknockoffpy.heteroknockofftorch.torchImportances import PRISMPredictionModel
+
+    rng = np.random.default_rng(11)
+    n, p = 40, 6
+    X_np = rng.standard_normal((n, 2 * p)).astype(np.float32)
+    y_np = (X_np[:, 0] + rng.standard_normal(n) * 0.1).astype(np.float32)
+    groups = [[i] for i in range(2 * p)]
+
+    val_losses: list[float] = []
+    orig_eval_loss = PRISMPredictionModel._eval_loss
+
+    def _spy_eval_loss(model, X_t, y_t, loss_fn, weight_t=None):
+        result = orig_eval_loss(model, X_t, y_t, loss_fn, weight_t)
+        val_losses.append((X_t.shape[0], result))
+        return result
+
+    PRISMPredictionModel._eval_loss = staticmethod(_spy_eval_loss)
+    try:
+        pm = PRISMPredictionModel(
+            input_size=2 * p, layers=[64], model_type='mlp',
+            n_warmup=300, warmup_patience=10_000, warmup_check_interval=10,
+            warmup_val_frac=0.3, warmup_weight_decay=0.0,
+            learning_rate=0.02, verbose=1, rng=np.random.default_rng(3),
+        )
+        pm.fit(X=X_np, y=y_np, groups=groups, lambda_path=None, calibrate=False)
+    finally:
+        PRISMPredictionModel._eval_loss = staticmethod(orig_eval_loss)
+
+    # Chronological order: periodic val-shaped checks during the loop, then
+    # (post-loop, verbose block) one full-train-shaped eval, then one final
+    # val-shaped eval -- the restored model's actual val loss.
+    n_val = val_losses[0][0]
+    val_shaped = [v for shape, v in val_losses if shape == n_val]
+    periodic_checks, final_val = val_shaped[:-1], val_shaped[-1]
+
+    assert len(periodic_checks) >= 5, "scenario didn't run enough checks to be a meaningful test"
+    assert min(periodic_checks) < periodic_checks[-1], (
+        "scenario didn't overfit as engineered -- last periodic check should be "
+        "worse than some earlier one, or this test doesn't actually exercise restoration"
+    )
+    assert final_val == pytest.approx(min(periodic_checks), rel=1e-5), (
+        f"final val loss {final_val} should equal the best periodic check "
+        f"{min(periodic_checks)} (restoration), not drift to a later, worse value"
+    )

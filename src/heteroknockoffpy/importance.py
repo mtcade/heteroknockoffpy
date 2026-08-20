@@ -20,9 +20,17 @@ def prismWImportances(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
-    n_blocks: int = 30,
+    n_blocks: int | None = None,
+    calibrate: bool = False,
+    lambda_min: float | None = None,
+    lambda_max: float | None = None,
+    a_min: float | None = None,
+    a_max: float | None = None,
+    calibrate_rmin: float = 0.01,
+    calibrate_rmax: float = 1.0,
     batch_size: int | None = None,
     epochs: int = 500,
+    total_steps: int | None = None,
     model_type: str = 'mlp',
     n_warmup: int = 5000,
     vertical_prefit: bool = False,
@@ -34,13 +42,14 @@ def prismWImportances(
     verbose: int = 0,
     weight: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
+    categorical_collapse_method: Literal['l2_norm','range'] = 'l2_norm',
     ) -> np.ndarray:
     """
     PRISM-W importances: average of group-norm snapshots over a lambda regularization path.
 
     Trains a single MLP on [X, Xk] → y with an adaptive proximal penalty on the input layer.
-    At the end of each lambda stage the group norms ||w[:, group_j]||_F are recorded;
-    the final importances are the mean over all snapshots.
+    At the end of each lambda stage the group norms are recorded; the final importances are
+    the mean over all snapshots.
 
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.
@@ -60,11 +69,45 @@ def prismWImportances(
     :param a_path: Per-stage input-layer penalty values. If None (default), drawn
         independently from Uniform(0.3, 1) via `rng`, at the resolved lambda_path's
         length (NOT mirrored from lambda_path's own values).
-    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None
+        (including under `calibrate=True`, where it also controls how many blocks
+        the calibration pilot pass averages its gradient ratio over). Incompatible
+        with an explicit `lambda_path`/`a_path` -- raises `ValueError` if both are given.
+    :param calibrate: If True, runs GRIP2 Eq. 5's gradient-ratio calibration (on the
+        post-warmup model) to derive `lambda_path` instead of requiring it; `a_path` is
+        still drawn from `Uniform(a_min, a_max)` and the calibration ratio is averaged
+        over it. Mutually exclusive with `lambda_path`, `a_path`, `lambda_min`,
+        `lambda_max`, `a_min`, `a_max` -- raises `ValueError` if any of those are given
+        alongside `calibrate=True`, since calibration determines all of them itself.
+    :param lambda_min: Lower bound for `lambda_path`'s `LogUniform` draw when
+        `lambda_path` is None and `calibrate=False`. Defaults to 1e-3 when omitted. Per
+        GRIP2, `lambda`'s range has no universal fixed bound (unlike `a`'s fixed upper
+        bound of 1) -- both endpoints are always context-dependent, whether set
+        manually here or derived by `calibrate`.
+    :param lambda_max: Upper bound for that same draw; defaults to 1e-1 when omitted.
+    :param a_min: Lower bound for `a_path`'s `Uniform` draw when `a_path` is None.
+        Defaults to 0.3 when omitted. GRIP2's own recommended default is 0.1; this
+        codebase's historical default is 0.3.
+    :param a_max: Upper bound for that same draw; defaults to 1.0 when omitted --
+        GRIP2 always fixes `a`'s upper bound at the literal constant 1, so this is
+        exposed for override/symmetry with `a_min` rather than because the paper
+        ever varies it.
+    :param calibrate_rmin: Target lower bound for the gradient-ratio
+        `||grad_W R|| / ||grad_W L_pred||` that `calibrate=True` solves for (GRIP2
+        Eq. 5's `r_min`). Only consulted when `calibrate=True`.
+    :param calibrate_rmax: Target upper bound for that same ratio (`r_max`). Paper
+        recommends 0.20 for exact/well-conditioned knockoffs, 1.0 (this function's
+        default) for approximate/ill-conditioned ones. Only consulted when `calibrate=True`.
         Ignored if `lambda_path` is given explicitly.
     :param batch_size: Minibatch size; `None` (the default) uses full-batch training.
-    :param epochs: Total training epochs, distributed as evenly as possible
-        across lambda stages. Default `500`.
+    :param epochs: Full-batch-equivalent training passes. Converted internally to a raw
+        step budget (`epochs * ceil(n / effective_batch_size)`), distributed as evenly as
+        possible in raw-step units (not whole epochs) across lambda stages. Default `500`.
+        Ignored if `total_steps` is given.
+    :param total_steps: Overrides the `epochs`-derived step budget with an exact step
+        count, independent of `n`/`batch_size`. `None` (default) falls back to the
+        `epochs`-derived budget. Either way, changing `n_blocks`/`lambda_path` length only
+        changes how finely this fixed total budget is sliced across BSS blocks.
     :param n_warmup: Steps of warmup training before entering the lambda-path
         schedule. Default `5000`.
     :param vertical_prefit: Whether to prefit a smaller model and transfer its
@@ -81,6 +124,19 @@ def prismWImportances(
     :param rng: Seeds the default lambda/a-path draw above and torch's global RNG
         (parameter init, DataLoader shuffling, etc.) for full run-to-run
         reproducibility. Unseeded if omitted.
+    :param categorical_collapse_method: How a categorical (multi-column OHE) group's
+        per-category column norms collapse into one importance value; ignored for
+        numeric (singleton) groups, which always use their own column norm.
+        - 'l2_norm' (default): the Frobenius norm of the whole group's weight
+          block (equivalently the L2 norm of the group's per-column norm vector).
+          Aggregates signal across every category, so it's stronger when a
+          categorical variable's true effect is spread across several/all of its
+          categories, but gets diluted when the effect is concentrated in one.
+        - 'range': a zero-anchored max-min spread over the group's per-column
+          norms (`max(max_j, 0) - min(min_j, 0)`) -- isolates the single most
+          extreme category's column norm instead of aggregating. Stronger when
+          only one category actually deviates; discards other categories' real
+          signal when the effect is spread across several.
     :returns: Array of shape (2*p,) — first p entries for X, last p for Xk.
     """
     from . import _processIsolation
@@ -93,8 +149,16 @@ def prismWImportances(
         lambda_path = lambda_path,
         a_path = a_path,
         n_blocks = n_blocks,
+        calibrate = calibrate,
+        lambda_min = lambda_min,
+        lambda_max = lambda_max,
+        a_min = a_min,
+        a_max = a_max,
+        calibrate_rmin = calibrate_rmin,
+        calibrate_rmax = calibrate_rmax,
         batch_size = batch_size,
         epochs = epochs,
+        total_steps = total_steps,
         model_type = model_type,
         n_warmup = n_warmup,
         vertical_prefit = vertical_prefit,
@@ -106,6 +170,7 @@ def prismWImportances(
         verbose = verbose,
         weight = weight,
         rng = rng,
+        categorical_collapse_method = categorical_collapse_method,
     )
 #/def prismWImportances
 
@@ -117,9 +182,17 @@ def prismWImportancesPerOHE(
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
-    n_blocks: int = 30,
+    n_blocks: int | None = None,
+    calibrate: bool = False,
+    lambda_min: float | None = None,
+    lambda_max: float | None = None,
+    a_min: float | None = None,
+    a_max: float | None = None,
+    calibrate_rmin: float = 0.01,
+    calibrate_rmax: float = 1.0,
     batch_size: int | None = None,
     epochs: int = 500,
+    total_steps: int | None = None,
     model_type: Literal['mlp','pairwise',] = 'mlp',
     n_warmup: int = 5000,
     vertical_prefit: bool = False,
@@ -157,9 +230,44 @@ def prismWImportancesPerOHE(
     :param model_type: 'mlp' or 'pairwise' only.
     :param lambda_path: See `prismWImportances` -- if None, drawn from LogUniform(1e-3, 1e-1).
     :param a_path: If None, drawn independently from Uniform(0.3, 1).
-    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None
+        (including under `calibrate=True`, where it also controls how many blocks
+        the calibration pilot pass averages its gradient ratio over). Incompatible
+        with an explicit `lambda_path`/`a_path` -- raises `ValueError` if both are given.
+    :param calibrate: If True, runs GRIP2 Eq. 5's gradient-ratio calibration (on the
+        post-warmup model) to derive `lambda_path` instead of requiring it; `a_path` is
+        still drawn from `Uniform(a_min, a_max)` and the calibration ratio is averaged
+        over it. Mutually exclusive with `lambda_path`, `a_path`, `lambda_min`,
+        `lambda_max`, `a_min`, `a_max` -- raises `ValueError` if any of those are given
+        alongside `calibrate=True`, since calibration determines all of them itself.
+    :param lambda_min: Lower bound for `lambda_path`'s `LogUniform` draw when
+        `lambda_path` is None and `calibrate=False`. Defaults to 1e-3 when omitted. Per
+        GRIP2, `lambda`'s range has no universal fixed bound (unlike `a`'s fixed upper
+        bound of 1) -- both endpoints are always context-dependent, whether set
+        manually here or derived by `calibrate`.
+    :param lambda_max: Upper bound for that same draw; defaults to 1e-1 when omitted.
+    :param a_min: Lower bound for `a_path`'s `Uniform` draw when `a_path` is None.
+        Defaults to 0.3 when omitted. GRIP2's own recommended default is 0.1; this
+        codebase's historical default is 0.3.
+    :param a_max: Upper bound for that same draw; defaults to 1.0 when omitted --
+        GRIP2 always fixes `a`'s upper bound at the literal constant 1, so this is
+        exposed for override/symmetry with `a_min` rather than because the paper
+        ever varies it.
+    :param calibrate_rmin: Target lower bound for the gradient-ratio
+        `||grad_W R|| / ||grad_W L_pred||` that `calibrate=True` solves for (GRIP2
+        Eq. 5's `r_min`). Only consulted when `calibrate=True`.
+    :param calibrate_rmax: Target upper bound for that same ratio (`r_max`). Paper
+        recommends 0.20 for exact/well-conditioned knockoffs, 1.0 (this function's
+        default) for approximate/ill-conditioned ones. Only consulted when `calibrate=True`.
     :param batch_size: Minibatch size; `None` uses full-batch training.
-    :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
+    :param epochs: Full-batch-equivalent training passes. Converted internally to a raw
+        step budget (`epochs * ceil(n / effective_batch_size)`), distributed as evenly as
+        possible in raw-step units (not whole epochs) across lambda stages. Ignored if
+        `total_steps` is given.
+    :param total_steps: Overrides the `epochs`-derived step budget with an exact step
+        count, independent of `n`/`batch_size`. `None` (default) falls back to the
+        `epochs`-derived budget. Either way, changing `n_blocks`/`lambda_path` length only
+        changes how finely this fixed total budget is sliced across BSS blocks.
     :param n_warmup: Steps of warmup training before entering the lambda-path schedule.
     :param vertical_prefit: Whether to prefit a smaller model and transfer its
         weights vertically into the full model before the lambda-path loop.
@@ -188,8 +296,16 @@ def prismWImportancesPerOHE(
         lambda_path = lambda_path,
         a_path = a_path,
         n_blocks = n_blocks,
+        calibrate = calibrate,
+        lambda_min = lambda_min,
+        lambda_max = lambda_max,
+        a_min = a_min,
+        a_max = a_max,
+        calibrate_rmin = calibrate_rmin,
+        calibrate_rmax = calibrate_rmax,
         batch_size = batch_size,
         epochs = epochs,
+        total_steps = total_steps,
         model_type = model_type,
         n_warmup = n_warmup,
         vertical_prefit = vertical_prefit,
@@ -214,9 +330,17 @@ def prismGImportances(
     local_grad_method: Literal['auto_diff','bandwidth'] = 'bandwidth',
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
-    n_blocks: int = 30,
+    n_blocks: int | None = None,
+    calibrate: bool = False,
+    lambda_min: float | None = None,
+    lambda_max: float | None = None,
+    a_min: float | None = None,
+    a_max: float | None = None,
+    calibrate_rmin: float = 0.01,
+    calibrate_rmax: float = 1.0,
     batch_size: int | None = None,
     epochs: int = 500,
+    total_steps: int | None = None,
     bandwidth: float | None = 1.0,
     exponent: float = 1.0,
     model_type: str = 'mlp',
@@ -257,9 +381,44 @@ def prismGImportances(
         time -- see `prismWImportances`'s docstring for why this default is dynamic.
     :param a_path: Per-stage input-layer penalty values. If None (default), drawn
         independently from Uniform(0.3, 1) via `rng`, at the resolved lambda_path's length.
-    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None
+        (including under `calibrate=True`, where it also controls how many blocks
+        the calibration pilot pass averages its gradient ratio over). Incompatible
+        with an explicit `lambda_path`/`a_path` -- raises `ValueError` if both are given.
+    :param calibrate: If True, runs GRIP2 Eq. 5's gradient-ratio calibration (on the
+        post-warmup model) to derive `lambda_path` instead of requiring it; `a_path` is
+        still drawn from `Uniform(a_min, a_max)` and the calibration ratio is averaged
+        over it. Mutually exclusive with `lambda_path`, `a_path`, `lambda_min`,
+        `lambda_max`, `a_min`, `a_max` -- raises `ValueError` if any of those are given
+        alongside `calibrate=True`, since calibration determines all of them itself.
+    :param lambda_min: Lower bound for `lambda_path`'s `LogUniform` draw when
+        `lambda_path` is None and `calibrate=False`. Defaults to 1e-3 when omitted. Per
+        GRIP2, `lambda`'s range has no universal fixed bound (unlike `a`'s fixed upper
+        bound of 1) -- both endpoints are always context-dependent, whether set
+        manually here or derived by `calibrate`.
+    :param lambda_max: Upper bound for that same draw; defaults to 1e-1 when omitted.
+    :param a_min: Lower bound for `a_path`'s `Uniform` draw when `a_path` is None.
+        Defaults to 0.3 when omitted. GRIP2's own recommended default is 0.1; this
+        codebase's historical default is 0.3.
+    :param a_max: Upper bound for that same draw; defaults to 1.0 when omitted --
+        GRIP2 always fixes `a`'s upper bound at the literal constant 1, so this is
+        exposed for override/symmetry with `a_min` rather than because the paper
+        ever varies it.
+    :param calibrate_rmin: Target lower bound for the gradient-ratio
+        `||grad_W R|| / ||grad_W L_pred||` that `calibrate=True` solves for (GRIP2
+        Eq. 5's `r_min`). Only consulted when `calibrate=True`.
+    :param calibrate_rmax: Target upper bound for that same ratio (`r_max`). Paper
+        recommends 0.20 for exact/well-conditioned knockoffs, 1.0 (this function's
+        default) for approximate/ill-conditioned ones. Only consulted when `calibrate=True`.
     :param batch_size: Minibatch size; `None` uses full-batch training.
-    :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
+    :param epochs: Full-batch-equivalent training passes. Converted internally to a raw
+        step budget (`epochs * ceil(n / effective_batch_size)`), distributed as evenly as
+        possible in raw-step units (not whole epochs) across lambda stages. Ignored if
+        `total_steps` is given.
+    :param total_steps: Overrides the `epochs`-derived step budget with an exact step
+        count, independent of `n`/`batch_size`. `None` (default) falls back to the
+        `epochs`-derived budget. Either way, changing `n_blocks`/`lambda_path` length only
+        changes how finely this fixed total budget is sliced across BSS blocks.
     :param bandwidth: Bandwidth for the finite-difference approximation when
         `local_grad_method='bandwidth'`. Used exactly as given -- no auto-scaling
         from `n` or column std. Default `1.0`.
@@ -291,8 +450,16 @@ def prismGImportances(
         lambda_path = lambda_path,
         a_path = a_path,
         n_blocks = n_blocks,
+        calibrate = calibrate,
+        lambda_min = lambda_min,
+        lambda_max = lambda_max,
+        a_min = a_min,
+        a_max = a_max,
+        calibrate_rmin = calibrate_rmin,
+        calibrate_rmax = calibrate_rmax,
         batch_size = batch_size,
         epochs = epochs,
+        total_steps = total_steps,
         bandwidth = bandwidth,
         exponent = exponent,
         model_type = model_type,
@@ -319,9 +486,17 @@ def prismGWImportances(
     local_grad_method: Literal['auto_diff','bandwidth'] = 'bandwidth',
     lambda_path: Sequence[ float ] | None = None,
     a_path: Iterable[ float ] | None = None,
-    n_blocks: int = 30,
+    n_blocks: int | None = None,
+    calibrate: bool = False,
+    lambda_min: float | None = None,
+    lambda_max: float | None = None,
+    a_min: float | None = None,
+    a_max: float | None = None,
+    calibrate_rmin: float = 0.01,
+    calibrate_rmax: float = 1.0,
     batch_size: int | None = None,
     epochs: int = 500,
+    total_steps: int | None = None,
     bandwidth: float | None = 1.0,
     exponent: float = 1.0,
     model_type: str = 'mlp',
@@ -335,6 +510,7 @@ def prismGWImportances(
     verbose: int = 0,
     weight: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
+    categorical_collapse_method: Literal['l2_norm','range'] = 'l2_norm',
     ) -> tuple[ np.ndarray, np.ndarray ]:
     """
     PRISM-G and PRISM-W importances from a single training pass.
@@ -357,10 +533,44 @@ def prismGWImportances(
         LogUniform(1e-3, 1e-1) via `rng` -- see `prismWImportances`'s docstring.
     :param a_path: Per-stage input-layer penalty values. If None (default), drawn
         independently from Uniform(0.3, 1) via `rng`.
-    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None
+        (including under `calibrate=True`, where it also controls how many blocks
+        the calibration pilot pass averages its gradient ratio over). Incompatible
+        with an explicit `lambda_path`/`a_path` -- raises `ValueError` if both are given.
+    :param calibrate: If True, runs GRIP2 Eq. 5's gradient-ratio calibration (on the
+        post-warmup model) to derive `lambda_path` instead of requiring it; `a_path` is
+        still drawn from `Uniform(a_min, a_max)` and the calibration ratio is averaged
+        over it. Mutually exclusive with `lambda_path`, `a_path`, `lambda_min`,
+        `lambda_max`, `a_min`, `a_max` -- raises `ValueError` if any of those are given
+        alongside `calibrate=True`, since calibration determines all of them itself.
+    :param lambda_min: Lower bound for `lambda_path`'s `LogUniform` draw when
+        `lambda_path` is None and `calibrate=False`. Defaults to 1e-3 when omitted. Per
+        GRIP2, `lambda`'s range has no universal fixed bound (unlike `a`'s fixed upper
+        bound of 1) -- both endpoints are always context-dependent, whether set
+        manually here or derived by `calibrate`.
+    :param lambda_max: Upper bound for that same draw; defaults to 1e-1 when omitted.
+    :param a_min: Lower bound for `a_path`'s `Uniform` draw when `a_path` is None.
+        Defaults to 0.3 when omitted. GRIP2's own recommended default is 0.1; this
+        codebase's historical default is 0.3.
+    :param a_max: Upper bound for that same draw; defaults to 1.0 when omitted --
+        GRIP2 always fixes `a`'s upper bound at the literal constant 1, so this is
+        exposed for override/symmetry with `a_min` rather than because the paper
+        ever varies it.
+    :param calibrate_rmin: Target lower bound for the gradient-ratio
+        `||grad_W R|| / ||grad_W L_pred||` that `calibrate=True` solves for (GRIP2
+        Eq. 5's `r_min`). Only consulted when `calibrate=True`.
+    :param calibrate_rmax: Target upper bound for that same ratio (`r_max`). Paper
+        recommends 0.20 for exact/well-conditioned knockoffs, 1.0 (this function's
+        default) for approximate/ill-conditioned ones. Only consulted when `calibrate=True`.
     :param batch_size: Minibatch size; `None` (the default) uses full-batch training.
-    :param epochs: Total training epochs, distributed as evenly as possible
-        across lambda stages. Default `500`.
+    :param epochs: Full-batch-equivalent training passes. Converted internally to a raw
+        step budget (`epochs * ceil(n / effective_batch_size)`), distributed as evenly as
+        possible in raw-step units (not whole epochs) across lambda stages. Default `500`.
+        Ignored if `total_steps` is given.
+    :param total_steps: Overrides the `epochs`-derived step budget with an exact step
+        count, independent of `n`/`batch_size`. `None` (default) falls back to the
+        `epochs`-derived budget. Either way, changing `n_blocks`/`lambda_path` length only
+        changes how finely this fixed total budget is sliced across BSS blocks.
     :param bandwidth: Bandwidth for the finite-difference approximation when
         `local_grad_method='bandwidth'`. Used exactly as given -- no auto-scaling
         from `n`. Default `1.0`.
@@ -380,6 +590,9 @@ def prismGWImportances(
     :param dense_activation: Activation function name for the MLP's hidden layers.
     :param verbose: Verbosity level (0 = silent).
     :param rng: Seeds the default lambda/a-path draw and torch's global RNG.
+    :param categorical_collapse_method: See `prismWImportances` -- applies only to
+        the PRISM-W side of the returned tuple; PRISM-G's own categorical
+        handling is unaffected.
     :returns: (g_importances, w_importances) both of shape (2*p,).
     """
     from . import _processIsolation
@@ -393,8 +606,16 @@ def prismGWImportances(
         lambda_path = lambda_path,
         a_path = a_path,
         n_blocks = n_blocks,
+        calibrate = calibrate,
+        lambda_min = lambda_min,
+        lambda_max = lambda_max,
+        a_min = a_min,
+        a_max = a_max,
+        calibrate_rmin = calibrate_rmin,
+        calibrate_rmax = calibrate_rmax,
         batch_size = batch_size,
         epochs = epochs,
+        total_steps = total_steps,
         bandwidth = bandwidth,
         exponent = exponent,
         model_type = model_type,
@@ -408,6 +629,7 @@ def prismGWImportances(
         verbose = verbose,
         weight = weight,
         rng = rng,
+        categorical_collapse_method = categorical_collapse_method,
     )
 #/def prismGWImportances
 
@@ -421,9 +643,17 @@ def prismGLocalGradients(
     local_grad_method: Literal["auto_diff","bandwidth"] = 'bandwidth',
     lambda_path:       Sequence[float] | None = None,
     a_path:            Sequence[float] | None = None,
-    n_blocks:          int = 30,
+    n_blocks:          int | None = None,
+    calibrate:         bool = False,
+    lambda_min:        float | None = None,
+    lambda_max:        float | None = None,
+    a_min:             float | None = None,
+    a_max:             float | None = None,
+    calibrate_rmin:    float = 0.01,
+    calibrate_rmax:    float = 1.0,
     batch_size:        int | None = None,
     epochs:            int = 500,
+    total_steps:       int | None = None,
     bandwidth:         float | None = 1.0,
     model_type:        str = 'mlp',
     n_warmup:          int = 5000,
@@ -468,9 +698,44 @@ def prismGLocalGradients(
     :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite difference).
     :param lambda_path: If None (default), drawn from LogUniform(1e-3, 1e-1) via `rng`.
     :param a_path: If None (default), drawn independently from Uniform(0.3, 1) via `rng`.
-    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None.
+    :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None
+        (including under `calibrate=True`, where it also controls how many blocks
+        the calibration pilot pass averages its gradient ratio over). Incompatible
+        with an explicit `lambda_path`/`a_path` -- raises `ValueError` if both are given.
+    :param calibrate: If True, runs GRIP2 Eq. 5's gradient-ratio calibration (on the
+        post-warmup model) to derive `lambda_path` instead of requiring it; `a_path` is
+        still drawn from `Uniform(a_min, a_max)` and the calibration ratio is averaged
+        over it. Mutually exclusive with `lambda_path`, `a_path`, `lambda_min`,
+        `lambda_max`, `a_min`, `a_max` -- raises `ValueError` if any of those are given
+        alongside `calibrate=True`, since calibration determines all of them itself.
+    :param lambda_min: Lower bound for `lambda_path`'s `LogUniform` draw when
+        `lambda_path` is None and `calibrate=False`. Defaults to 1e-3 when omitted. Per
+        GRIP2, `lambda`'s range has no universal fixed bound (unlike `a`'s fixed upper
+        bound of 1) -- both endpoints are always context-dependent, whether set
+        manually here or derived by `calibrate`.
+    :param lambda_max: Upper bound for that same draw; defaults to 1e-1 when omitted.
+    :param a_min: Lower bound for `a_path`'s `Uniform` draw when `a_path` is None.
+        Defaults to 0.3 when omitted. GRIP2's own recommended default is 0.1; this
+        codebase's historical default is 0.3.
+    :param a_max: Upper bound for that same draw; defaults to 1.0 when omitted --
+        GRIP2 always fixes `a`'s upper bound at the literal constant 1, so this is
+        exposed for override/symmetry with `a_min` rather than because the paper
+        ever varies it.
+    :param calibrate_rmin: Target lower bound for the gradient-ratio
+        `||grad_W R|| / ||grad_W L_pred||` that `calibrate=True` solves for (GRIP2
+        Eq. 5's `r_min`). Only consulted when `calibrate=True`.
+    :param calibrate_rmax: Target upper bound for that same ratio (`r_max`). Paper
+        recommends 0.20 for exact/well-conditioned knockoffs, 1.0 (this function's
+        default) for approximate/ill-conditioned ones. Only consulted when `calibrate=True`.
     :param batch_size: Minibatch size; `None` uses full-batch training.
-    :param epochs: Total training epochs, distributed as evenly as possible across lambda stages.
+    :param epochs: Full-batch-equivalent training passes. Converted internally to a raw
+        step budget (`epochs * ceil(n / effective_batch_size)`), distributed as evenly as
+        possible in raw-step units (not whole epochs) across lambda stages. Ignored if
+        `total_steps` is given.
+    :param total_steps: Overrides the `epochs`-derived step budget with an exact step
+        count, independent of `n`/`batch_size`. `None` (default) falls back to the
+        `epochs`-derived budget. Either way, changing `n_blocks`/`lambda_path` length only
+        changes how finely this fixed total budget is sliced across BSS blocks.
     :param bandwidth: Bandwidth for the finite-difference approximation. Used
         exactly as given -- no auto-scaling from `n`. Default `1.0`.
     :param model_type: see heteroknockofftorch.torchImportances.PRISMPredictionModel docstring
@@ -500,8 +765,16 @@ def prismGLocalGradients(
         lambda_path = lambda_path,
         a_path = a_path,
         n_blocks = n_blocks,
+        calibrate = calibrate,
+        lambda_min = lambda_min,
+        lambda_max = lambda_max,
+        a_min = a_min,
+        a_max = a_max,
+        calibrate_rmin = calibrate_rmin,
+        calibrate_rmax = calibrate_rmax,
         batch_size = batch_size,
         epochs = epochs,
+        total_steps = total_steps,
         bandwidth = bandwidth,
         model_type = model_type,
         n_warmup = n_warmup,
@@ -873,7 +1146,7 @@ def lassoImportances(
                 { col: col + '~' for col in Xk.columns }
             ),
         ),
-        how = 'horizontal_extend',
+        how = 'horizontal',
     )
 
     oheDict: dict[ str, int | tuple[ int,...] ] = utilities.get_oheDict(
@@ -1112,7 +1385,7 @@ def ridgeImportances(
             X,
             Xk.rename( { col: col + '~' for col in Xk.columns } ),
         ),
-        how = 'horizontal_extend',
+        how = 'horizontal',
     )
 
     oheDict: dict[ str, int | tuple[ int,...] ] = utilities.get_oheDict(
@@ -1353,7 +1626,7 @@ def elasticImportances(
             X,
             Xk.rename( { col: col + '~' for col in Xk.columns } ),
         ),
-        how = 'horizontal_extend',
+        how = 'horizontal',
     )
 
     oheDict: dict[ str, int | tuple[ int,...] ] = utilities.get_oheDict(
