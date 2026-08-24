@@ -119,18 +119,18 @@ Every importance function shares this common core of inputs:
 - **`y`** — Outcome; scalar (continuous/count) or categorical Series/DataFrame.
 - **`outcome_type`** — `'continuous'`/`'count'`/`'categorical'`; inferred from `y` if omitted.
 - **`verbose`** — Verbosity level (`0` = silent).
-- **`weight`** — Optional length-`n` sample weight. `None` (default) fits unweighted. For the PRISM-torch family (`prismWImportances`/`prismGImportances`/`prismGWImportances`/`prismWImportancesPerOHE`), it's a per-sample multiplier on the training loss. For `rangerGiniImportances`/`rangerPrismImportances`, it's forwarded to `ranger::ranger`'s `case.weights` (resampling-probability weighting, not a loss multiplier). For `lassoImportances`/`ridgeImportances`/`elasticImportances`, it's forwarded as each underlying sklearn/statsmodels model's `sample_weight`. For the xgboost-based functions (`xgbImportances`/`xgbPrismImportances`/`xgbShapImportances`), it's xgboost's own native `sample_weight`.
+- **`weight`** — Optional length-`n` sample weight. `None` (default) fits unweighted. For the PRISM-torch family (`grip2Importances`/`prismTorchImportances`/`prismGrip2Importances`/`grip2ImportancesPerOHE`), it's a per-sample multiplier on the training loss. For `rangerGiniImportances`/`rangerPrismImportances`, it's forwarded to `ranger::ranger`'s `case.weights` (resampling-probability weighting, not a loss multiplier). For `lassoImportances`/`ridgeImportances`/`elasticImportances`, it's forwarded as each underlying sklearn/statsmodels model's `sample_weight`. For the xgboost-based functions (`xgbImportances`/`xgbPrismImportances`/`xgbShapImportances`), it's xgboost's own native `sample_weight`.
 
 All importance functions return a `np.ndarray` of length `2p` — scores for `[x_1, …, x_p, x̃_1, …, x̃_p]`. Use `wFromImportances` to convert these to knockoff W-statistics for variable selection.
 
-### PRISM-W — `prismWImportances`
+### GRIP2 — `grip2Importances`
 
 Trains a single MLP on `[X, Xk]` while sweeping a lambda regularization path. Records first-layer column norms `‖W[:,j]‖₂` at the end of each lambda stage; the returned importances are the mean across all snapshots. Fast — no extra forward passes per snapshot.
 
 ```python
-from heteroknockoffpy.importance import prismWImportances
+from heteroknockoffpy.importance import grip2Importances
 
-imp = prismWImportances(
+imp = grip2Importances(
     X=X, Xk=Xk, y=y,
     layers=[64, 32],
     outcome_type="continuous",   # "continuous" | "count" | "categorical" | None (inferred)
@@ -139,14 +139,14 @@ imp = prismWImportances(
 )
 ```
 
-### PRISM-G — `prismGImportances`
+### Torch PRISM — `prismTorchImportances`
 
-Same training procedure as PRISM-W. Records per-feature output sensitivity `φⱼ = mean|ŷ(x+σeⱼ) − ŷ(x−σeⱼ)| / 2σ` at each lambda stage. More directly tied to the model's predictions than PRISM-W, but requires extra forward passes per snapshot.
+Same training procedure as GRIP2. Records per-feature output sensitivity `φⱼ = mean|ŷ(x+σeⱼ) − ŷ(x−σeⱼ)| / 2σ` at each lambda stage. More directly tied to the model's predictions than GRIP2, but requires extra forward passes per snapshot.
 
 ```python
-from heteroknockoffpy.importance import prismGImportances
+from heteroknockoffpy.importance import prismTorchImportances
 
-imp = prismGImportances(
+imp = prismTorchImportances(
     X=X, Xk=Xk, y=y,
     layers=[64, 32],
     outcome_type="continuous",
@@ -159,16 +159,16 @@ imp = prismGImportances(
 
 The regularization path defaults to `logspace(1, -2, 50)`; pass `lambda_path` and/or `a_path` to override. `epochs` is converted to a raw gradient-step budget (`epochs * ceil(n / batch_size)`) and distributed as evenly as possible in raw-step units (not whole epochs) across stages, so a block can end mid-epoch. Changing the number of stages (`lambda_path` length) redistributes this fixed total budget, it never changes it. Pass `total_steps` instead of `epochs` to pin the exact step count directly, independent of `n`/`batch_size`.
 
-### PRISM-GW — `prismGWImportances`
+### PRISM-GRIP2 — `prismGrip2Importances`
 
-Trains the same model as PRISM-G and PRISM-W but in a single pass, producing both sets of importances simultaneously. At each lambda stage the snapshot closure captures PRISM-W group norms as a side effect while returning PRISM-G local-gradient importances as the primary snapshot. Roughly halves the compute cost of running both methods separately.
+Trains the same model as Torch PRISM and GRIP2 but in a single pass, producing both sets of importances simultaneously. At each lambda stage the snapshot closure captures GRIP2 group norms as a side effect while returning Torch PRISM local-gradient importances as the primary snapshot. Roughly halves the compute cost of running both methods separately.
 
 Returns a 2-tuple `(g_importances, w_importances)`, each of shape `(2p,)`.
 
 ```python
-from heteroknockoffpy.importance import prismGWImportances
+from heteroknockoffpy.importance import prismGrip2Importances
 
-g_imp, w_imp = prismGWImportances(
+g_imp, w_imp = prismGrip2Importances(
     X=X, Xk=Xk, y=y,
     layers=[64, 32],
     outcome_type="continuous",
@@ -177,7 +177,7 @@ g_imp, w_imp = prismGWImportances(
 )
 ```
 
-All parameters are identical to `prismGImportances`. `local_grad_method` is required (it governs the G snapshot; the W snapshot uses group norms and needs no gradient method).
+All parameters are identical to `prismTorchImportances`. `local_grad_method` is required (it governs the G snapshot; the W snapshot uses group norms and needs no gradient method).
 
 ### Lasso — `lassoImportances`
 

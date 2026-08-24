@@ -136,8 +136,8 @@ def test_prism_torch_weight_shifts_importance_to_weighted_subpopulation():
     # state, which depends on what ran earlier in the process -- making the
     # weighted-vs-unweighted comparison nondeterministic (order-dependent)
     # instead of isolating the effect of `weight` alone.
-    imp_weighted = importance.prismWImportances(**kwargs, weight=weight, rng=np.random.default_rng(42))
-    imp_unweighted = importance.prismWImportances(**kwargs, rng=np.random.default_rng(42))
+    imp_weighted = importance.grip2Importances(**kwargs, weight=weight, rng=np.random.default_rng(42))
+    imp_unweighted = importance.grip2Importances(**kwargs, rng=np.random.default_rng(42))
 
     ratio_weighted = imp_weighted[0] / max(imp_weighted[1], 1e-9)
     ratio_unweighted = imp_unweighted[0] / max(imp_unweighted[1], 1e-9)

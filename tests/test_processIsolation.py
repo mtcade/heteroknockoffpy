@@ -158,25 +158,25 @@ assert {other_family!r} not in sys.modules, "xgbShapImportances leaked {other_fa
 """
 
 _PRISM_CALLS_TEMPLATE = """
-imp = importance.prismWImportances(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
+imp = importance.grip2Importances(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
 assert imp.shape == (2,) and np.all(np.isfinite(imp)), imp
-assert {other_family!r} not in sys.modules, "prismWImportances leaked {other_family}"
+assert {other_family!r} not in sys.modules, "grip2Importances leaked {other_family}"
 
-imp = importance.prismGImportances(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
+imp = importance.prismTorchImportances(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
 assert imp.shape == (2,) and np.all(np.isfinite(imp)), imp
-assert {other_family!r} not in sys.modules, "prismGImportances leaked {other_family}"
+assert {other_family!r} not in sys.modules, "prismTorchImportances leaked {other_family}"
 
-g, w = importance.prismGWImportances(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
+g, w = importance.prismGrip2Importances(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
 assert g.shape == (2,) and w.shape == (2,), (g, w)
-assert {other_family!r} not in sys.modules, "prismGWImportances leaked {other_family}"
+assert {other_family!r} not in sys.modules, "prismGrip2Importances leaked {other_family}"
 
-grads = importance.prismGLocalGradients(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
+grads = importance.prismTorchLocalGradients(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
 assert grads.shape[1] == 1, grads.shape
-assert {other_family!r} not in sys.modules, "prismGLocalGradients leaked {other_family}"
+assert {other_family!r} not in sys.modules, "prismTorchLocalGradients leaked {other_family}"
 
-imp = importance.prismWImportancesPerOHE(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
+imp = importance.grip2ImportancesPerOHE(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
 assert imp.shape == (2,) and np.all(np.isfinite(imp)), imp
-assert {other_family!r} not in sys.modules, "prismWImportancesPerOHE leaked {other_family}"
+assert {other_family!r} not in sys.modules, "grip2ImportancesPerOHE leaked {other_family}"
 """
 
 _GAN_TORCH_CALL_TEMPLATE = """

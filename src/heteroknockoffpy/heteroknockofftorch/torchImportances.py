@@ -622,7 +622,7 @@ class _PRISMNetworkAdditive(_PRISMNetworkBase):
 
 class PRISMPredictionModel:
     """
-    Wraps one of three PRISM network architectures for PRISM-W and PRISM-G importance computation.
+    Wraps one of three PRISM network architectures for GRIP2 and Torch PRISM importance computation.
 
     model_type
     ----------
@@ -828,11 +828,11 @@ class PRISMPredictionModel:
             budget rather than changing it. A single minibatch-index generator
             cycles continuously across block boundaries, so a block can end mid-
             epoch instead of being quantized to whole passes over the data.
-        :param snapshot_fn: If None, snapshots use get_group_importances (PRISM-W).
-                            Otherwise called as snapshot_fn(self, X_tensor) (for PRISM-G).
+        :param snapshot_fn: If None, snapshots use get_group_importances (GRIP2).
+                            Otherwise called as snapshot_fn(self, X_tensor) (for Torch PRISM).
         :param categorical_collapse_method: Forwarded to get_group_importances when
             snapshot_fn is None -- ignored otherwise, since a custom snapshot_fn
-            (e.g. PRISM-G/PRISM-GW's) is responsible for calling
+            (e.g. Torch PRISM/PRISM-GRIP2's) is responsible for calling
             get_group_importances itself if it wants one. See
             get_group_importances/_group_importance for what 'l2_norm' (default)
             vs 'range' mean.

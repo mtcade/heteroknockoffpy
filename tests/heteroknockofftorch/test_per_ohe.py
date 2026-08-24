@@ -2,8 +2,8 @@
 #//  test_per_ohe.py
 #//  heteroknockoffpy
 #//
-#//  Tests for prismWImportancesPerOHE: every OHE dummy column is treated as its
-#//  own independent variable (no group-level aggregation), unlike prismWImportances.
+#//  Tests for grip2ImportancesPerOHE: every OHE dummy column is treated as its
+#//  own independent variable (no group-level aggregation), unlike grip2Importances.
 #//
 import numpy as np
 import polars as pl
@@ -41,7 +41,7 @@ P_OHE = 4  # 2 numeric + 2 dummy columns (K=3, drop_first) per side
 def test_per_ohe_shape_is_ohe_width_not_variable_count(model_type):
     X, Xk, y = _make_mixed_synthetic()
     lambda_path = np.logspace(0, -1, 5)
-    imp = importance.prismWImportancesPerOHE(
+    imp = importance.grip2ImportancesPerOHE(
         X=X, Xk=Xk, y=y,
         layers=[16, 8],
         model_type=model_type,
@@ -55,20 +55,20 @@ def test_per_ohe_shape_is_ohe_width_not_variable_count(model_type):
 
 @pytest.mark.parametrize("model_type", ["mlp", "pairwise"])
 def test_per_ohe_differs_from_grouped_shape(model_type):
-    """Sanity check: the grouped prismWImportances returns one score per variable (3),
-    while prismWImportancesPerOHE returns one per OHE column (4) -- confirming the two
+    """Sanity check: the grouped grip2Importances returns one score per variable (3),
+    while grip2ImportancesPerOHE returns one per OHE column (4) -- confirming the two
     are not accidentally identical for this mixed fixture."""
     X, Xk, y = _make_mixed_synthetic()
     lambda_path = np.logspace(0, -1, 5)
 
-    grouped = importance.prismWImportances(
+    grouped = importance.grip2Importances(
         X=X, Xk=Xk, y=y,
         layers=[16, 8],
         model_type=model_type,
         lambda_path=lambda_path,
         epochs=3,
     )
-    per_ohe = importance.prismWImportancesPerOHE(
+    per_ohe = importance.grip2ImportancesPerOHE(
         X=X, Xk=Xk, y=y,
         layers=[16, 8],
         model_type=model_type,
@@ -84,7 +84,7 @@ def test_per_ohe_differs_from_grouped_shape(model_type):
 def test_per_ohe_rejects_unsupported_model_types(model_type):
     X, Xk, y = _make_mixed_synthetic()
     with pytest.raises(ValueError):
-        importance.prismWImportancesPerOHE(
+        importance.grip2ImportancesPerOHE(
             X=X, Xk=Xk, y=y,
             layers=[16, 8],
             model_type=model_type,
@@ -105,7 +105,7 @@ def test_per_ohe_all_numeric_matches_grouped_shape():
     y = pl.Series("y", X_np[:, 0] + rng.standard_normal(n) * 0.5)
 
     lambda_path = np.logspace(0, -1, 5)
-    imp = importance.prismWImportancesPerOHE(
+    imp = importance.grip2ImportancesPerOHE(
         X=X, Xk=Xk, y=y,
         layers=[16, 8],
         model_type="mlp",

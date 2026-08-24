@@ -26,10 +26,10 @@ def _make_synthetic(n: int = 200, p: int = 10, seed: int = 0):
 # Basic shape / non-negativity — a_path=None (default: use lambda values)
 # ---------------------------------------------------------------------------
 
-def test_prism_w_shape_and_nonneg():
+def test_grip2_shape_and_nonneg():
     X, Xk, y = _make_synthetic()
     lambda_path = np.logspace(0, -1, 5)
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X = X,
         Xk = Xk,
         y = y,
@@ -41,10 +41,10 @@ def test_prism_w_shape_and_nonneg():
     assert np.all(imp >= 0), "Importances should be non-negative"
 
 
-def test_prism_g_shape_and_nonneg():
+def test_prism_torch_shape_and_nonneg():
     X, Xk, y = _make_synthetic()
     lambda_path = np.logspace(0, -1, 5)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X,
         Xk = Xk,
         y = y,
@@ -57,10 +57,10 @@ def test_prism_g_shape_and_nonneg():
     assert np.all(imp >= 0), "Importances should be non-negative"
 
 
-def test_prism_g_bandwidth():
+def test_prism_torch_bandwidth():
     X, Xk, y = _make_synthetic(n=100, p=5)
     lambda_path = np.logspace(0, -1, 3)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X,
         Xk = Xk,
         y = y,
@@ -77,12 +77,12 @@ def test_prism_g_bandwidth():
 # a_path — explicit per-stage input-layer penalty values
 # ---------------------------------------------------------------------------
 
-def test_prism_w_a_path_constant():
+def test_grip2_a_path_constant():
     """Constant a_path replicates the old scalar a_min behaviour."""
     X, Xk, y = _make_synthetic(n=100, p=5)
     lambda_path = np.logspace(0, -1, 5)
     a_path = [1e-3] * len(lambda_path)
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X = X,
         Xk = Xk,
         y = y,
@@ -95,12 +95,12 @@ def test_prism_w_a_path_constant():
     assert np.all(imp >= 0)
 
 
-def test_prism_w_a_path_uniform():
+def test_grip2_a_path_uniform():
     """Linearly increasing a_path — one value per lambda stage."""
     X, Xk, y = _make_synthetic(n=100, p=5)
     lambda_path = np.logspace(0, -1, 5)
     a_path = list(np.linspace(0.3, 1.0, len(lambda_path)))
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X = X,
         Xk = Xk,
         y = y,
@@ -113,13 +113,13 @@ def test_prism_w_a_path_uniform():
     assert np.all(imp >= 0)
 
 
-def test_prism_w_a_path_shuffled():
+def test_grip2_a_path_shuffled():
     """Shuffled (non-monotone) a_path should run without error."""
     X, Xk, y = _make_synthetic(n=100, p=5, seed=42)
     lambda_path = np.logspace(0, -1, 5)
     rng = np.random.default_rng(42)
     a_path = list(rng.permutation(np.linspace(0.3, 1.0, len(lambda_path))))
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X = X,
         Xk = Xk,
         y = y,
@@ -132,12 +132,12 @@ def test_prism_w_a_path_shuffled():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_a_path_uniform():
-    """prismG with a linearly spaced a_path."""
+def test_prism_torch_a_path_uniform():
+    """prismTorch with a linearly spaced a_path."""
     X, Xk, y = _make_synthetic(n=100, p=5)
     lambda_path = np.logspace(0, -1, 4)
     a_path = list(np.linspace(0.3, 1.0, len(lambda_path)))
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X,
         Xk = Xk,
         y = y,
@@ -151,13 +151,13 @@ def test_prism_g_a_path_uniform():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_a_path_shuffled():
-    """prismG with a shuffled a_path."""
+def test_prism_torch_a_path_shuffled():
+    """prismTorch with a shuffled a_path."""
     X, Xk, y = _make_synthetic(n=100, p=5, seed=11)
     lambda_path = np.logspace(0, -1, 4)
     rng = np.random.default_rng(11)
     a_path = list(rng.permutation(np.linspace(0.3, 1.0, len(lambda_path))))
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X,
         Xk = Xk,
         y = y,
@@ -171,11 +171,11 @@ def test_prism_g_a_path_shuffled():
     assert np.all(imp >= 0)
 
 
-def test_prism_w_a_path_none_runs():
+def test_grip2_a_path_none_runs():
     """a_path=None (default) uses lambda_path values as input-layer penalty."""
     X, Xk, y = _make_synthetic(n=100, p=5)
     lambda_path = np.logspace(0, -1, 4)
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X = X,
         Xk = Xk,
         y = y,
@@ -188,11 +188,11 @@ def test_prism_w_a_path_none_runs():
     assert np.all(imp >= 0)
 
 
-def test_prism_w_a_path_increasing_lambda():
+def test_grip2_a_path_increasing_lambda():
     """Increasing lambda_path (low→high) with a_path=None."""
     X, Xk, y = _make_synthetic(n=100, p=5)
     lambda_path = list(np.linspace(1e-3, 0.1, 8))
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X = X,
         Xk = Xk,
         y = y,
@@ -208,11 +208,11 @@ def test_prism_w_a_path_increasing_lambda():
 # batch_size — mini-batch gradient steps
 # ---------------------------------------------------------------------------
 
-def test_prism_w_batch_size():
+def test_grip2_batch_size():
     """batch_size < n enables per-epoch mini-batch gradient steps."""
     X, Xk, y = _make_synthetic(n=100, p=5)
     lambda_path = np.logspace(0, -1, 4)
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X = X,
         Xk = Xk,
         y = y,
@@ -225,11 +225,11 @@ def test_prism_w_batch_size():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_batch_size():
-    """batch_size < n enables per-epoch mini-batch gradient steps for prismG."""
+def test_prism_torch_batch_size():
+    """batch_size < n enables per-epoch mini-batch gradient steps for prismTorch."""
     X, Xk, y = _make_synthetic(n=100, p=5)
     lambda_path = np.logspace(0, -1, 4)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X,
         Xk = Xk,
         y = y,
@@ -243,11 +243,11 @@ def test_prism_g_batch_size():
     assert np.all(imp >= 0)
 
 
-def test_prism_w_batch_size_larger_than_n():
+def test_grip2_batch_size_larger_than_n():
     """batch_size >= n falls back to full-batch (no crash)."""
     X, Xk, y = _make_synthetic(n=100, p=5)
     lambda_path = np.logspace(0, -1, 3)
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X = X,
         Xk = Xk,
         y = y,
@@ -260,12 +260,12 @@ def test_prism_w_batch_size_larger_than_n():
     assert np.all(imp >= 0)
 
 
-def test_prism_w_a_path_and_batch_size():
+def test_grip2_a_path_and_batch_size():
     """a_path and batch_size combined."""
     X, Xk, y = _make_synthetic(n=100, p=5, seed=7)
     lambda_path = np.logspace(0, -1, 4)
     a_path = list(np.linspace(0.3, 1.0, len(lambda_path)))
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X = X,
         Xk = Xk,
         y = y,
@@ -279,12 +279,12 @@ def test_prism_w_a_path_and_batch_size():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_a_path_and_batch_size():
-    """prismG with both a_path and batch_size."""
+def test_prism_torch_a_path_and_batch_size():
+    """prismTorch with both a_path and batch_size."""
     X, Xk, y = _make_synthetic(n=100, p=5, seed=8)
     lambda_path = np.logspace(0, -1, 4)
     a_path = list(np.linspace(0.3, 1.0, len(lambda_path)))
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X,
         Xk = Xk,
         y = y,
@@ -337,10 +337,10 @@ def _make_mixed_X(
 _LAMBDA_PATH_SHORT = np.logspace(-2, -3, 3)
 
 
-def test_prism_g_cat_output_k2_auto_diff():
+def test_prism_torch_cat_output_k2_auto_diff():
     X, Xk, _ = _make_synthetic(n=150, p=5, seed=1)
     y = _make_cat_y(150, k=2, seed=1)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X, Xk = Xk, y = y,
         layers = [8],
         local_grad_method = 'auto_diff',
@@ -351,10 +351,10 @@ def test_prism_g_cat_output_k2_auto_diff():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_cat_output_k3_auto_diff():
+def test_prism_torch_cat_output_k3_auto_diff():
     X, Xk, _ = _make_synthetic(n=150, p=5, seed=2)
     y = _make_cat_y(150, k=3, seed=2)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X, Xk = Xk, y = y,
         layers = [8],
         local_grad_method = 'auto_diff',
@@ -365,10 +365,10 @@ def test_prism_g_cat_output_k3_auto_diff():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_cat_output_k5_auto_diff():
+def test_prism_torch_cat_output_k5_auto_diff():
     X, Xk, _ = _make_synthetic(n=150, p=5, seed=3)
     y = _make_cat_y(150, k=5, seed=3)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X, Xk = Xk, y = y,
         layers = [8],
         local_grad_method = 'auto_diff',
@@ -383,10 +383,10 @@ def test_prism_g_cat_output_k5_auto_diff():
 # Categorical outcome — bandwidth
 # ---------------------------------------------------------------------------
 
-def test_prism_g_cat_output_k3_bandwidth():
+def test_prism_torch_cat_output_k3_bandwidth():
     X, Xk, _ = _make_synthetic(n=150, p=5, seed=4)
     y = _make_cat_y(150, k=3, seed=4)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X, Xk = Xk, y = y,
         layers = [8],
         local_grad_method = 'bandwidth',
@@ -401,10 +401,10 @@ def test_prism_g_cat_output_k3_bandwidth():
 # Categorical input — varying category counts, continuous output
 # ---------------------------------------------------------------------------
 
-def test_prism_g_cat_input_2cat():
+def test_prism_torch_cat_input_2cat():
     X, Xk, p = _make_mixed_X(n=150, p_numeric=3, cat_cols=[2, 2], seed=5)
     y = pl.Series("y", np.random.default_rng(5).standard_normal(150))
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X, Xk = Xk, y = y,
         layers = [8],
         local_grad_method = 'auto_diff',
@@ -415,10 +415,10 @@ def test_prism_g_cat_input_2cat():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_cat_input_3cat():
+def test_prism_torch_cat_input_3cat():
     X, Xk, p = _make_mixed_X(n=150, p_numeric=3, cat_cols=[3, 3], seed=6)
     y = pl.Series("y", np.random.default_rng(6).standard_normal(150))
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X, Xk = Xk, y = y,
         layers = [8],
         local_grad_method = 'auto_diff',
@@ -429,10 +429,10 @@ def test_prism_g_cat_input_3cat():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_cat_input_4cat():
+def test_prism_torch_cat_input_4cat():
     X, Xk, p = _make_mixed_X(n=150, p_numeric=2, cat_cols=[4, 4], seed=7)
     y = pl.Series("y", np.random.default_rng(7).standard_normal(150))
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X, Xk = Xk, y = y,
         layers = [8],
         local_grad_method = 'auto_diff',
@@ -447,13 +447,13 @@ def test_prism_g_cat_input_4cat():
 # Categorical input + a_path — exercises the categorical proximal branch
 # ---------------------------------------------------------------------------
 
-def test_prism_w_cat_input_a_path():
+def test_grip2_cat_input_a_path():
     """a_path with categorical input features exercises block-Frobenius group regularisation."""
     X, Xk, p = _make_mixed_X(n=150, p_numeric=3, cat_cols=[2, 3], seed=20)
     y = pl.Series("y", np.random.default_rng(20).standard_normal(150))
     lambda_path = _LAMBDA_PATH_SHORT
     a_path = list(np.linspace(0.3, 1.0, len(lambda_path)))
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X = X, Xk = Xk, y = y,
         layers = [8],
         lambda_path = lambda_path,
@@ -464,13 +464,13 @@ def test_prism_w_cat_input_a_path():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_cat_input_a_path():
-    """prismG with categorical input + a_path."""
+def test_prism_torch_cat_input_a_path():
+    """prismTorch with categorical input + a_path."""
     X, Xk, p = _make_mixed_X(n=150, p_numeric=3, cat_cols=[2, 3], seed=21)
     y = pl.Series("y", np.random.default_rng(21).standard_normal(150))
     lambda_path = _LAMBDA_PATH_SHORT
     a_path = list(np.linspace(0.3, 1.0, len(lambda_path)))
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X, Xk = Xk, y = y,
         layers = [8],
         local_grad_method = 'auto_diff',
@@ -486,10 +486,10 @@ def test_prism_g_cat_input_a_path():
 # Mixed: categorical input + categorical output
 # ---------------------------------------------------------------------------
 
-def test_prism_g_cat_input_cat_output_auto_diff():
+def test_prism_torch_cat_input_cat_output_auto_diff():
     X, Xk, p = _make_mixed_X(n=150, p_numeric=2, cat_cols=[3, 3], seed=8)
     y = _make_cat_y(150, k=3, seed=8)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X, Xk = Xk, y = y,
         layers = [8],
         local_grad_method = 'auto_diff',
@@ -500,10 +500,10 @@ def test_prism_g_cat_input_cat_output_auto_diff():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_cat_input_cat_output_bandwidth():
+def test_prism_torch_cat_input_cat_output_bandwidth():
     X, Xk, p = _make_mixed_X(n=150, p_numeric=2, cat_cols=[3, 3], seed=9)
     y = _make_cat_y(150, k=3, seed=9)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X = X, Xk = Xk, y = y,
         layers = [8],
         local_grad_method = 'bandwidth',
@@ -519,9 +519,9 @@ def test_prism_g_cat_input_cat_output_bandwidth():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("model_type", ["pairwise", "additive"])
-def test_prism_w_model_type_numeric(model_type):
+def test_grip2_model_type_numeric(model_type):
     X, Xk, y = _make_synthetic(n=100, p=5)
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X=X, Xk=Xk, y=y, layers=[16], model_type=model_type,
         lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
     )
@@ -530,9 +530,9 @@ def test_prism_w_model_type_numeric(model_type):
 
 
 @pytest.mark.parametrize("model_type", ["pairwise", "additive"])
-def test_prism_g_model_type_numeric(model_type):
+def test_prism_torch_model_type_numeric(model_type):
     X, Xk, y = _make_synthetic(n=100, p=5)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X=X, Xk=Xk, y=y, layers=[16], model_type=model_type,
         local_grad_method="auto_diff",
         lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
@@ -542,11 +542,11 @@ def test_prism_g_model_type_numeric(model_type):
 
 
 @pytest.mark.parametrize("model_type", ["pairwise", "additive"])
-def test_prism_w_model_type_cat_input(model_type):
+def test_grip2_model_type_cat_input(model_type):
     """OHE columns are treated as independent feature pairs in pairwise/additive."""
     X, Xk, p = _make_mixed_X(n=100, p_numeric=3, cat_cols=[2, 3], seed=30)
     y = pl.Series("y", np.random.default_rng(30).standard_normal(100))
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X=X, Xk=Xk, y=y, layers=[16], model_type=model_type,
         lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
@@ -555,10 +555,10 @@ def test_prism_w_model_type_cat_input(model_type):
 
 
 @pytest.mark.parametrize("model_type", ["pairwise", "additive"])
-def test_prism_g_model_type_cat_input(model_type):
+def test_prism_torch_model_type_cat_input(model_type):
     X, Xk, p = _make_mixed_X(n=100, p_numeric=3, cat_cols=[2, 3], seed=31)
     y = pl.Series("y", np.random.default_rng(31).standard_normal(100))
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X=X, Xk=Xk, y=y, layers=[16], model_type=model_type,
         local_grad_method="auto_diff",
         lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
@@ -632,10 +632,10 @@ def _make_count_y(n: int, seed: int = 0) -> pl.Series:
     return pl.Series("y", rng.poisson(lam=5, size=n))
 
 
-def test_prism_w_count_outcome():
+def test_grip2_count_outcome():
     X, Xk, _ = _make_synthetic(n=150, p=5, seed=40)
     y = _make_count_y(150, seed=40)
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X=X, Xk=Xk, y=y, layers=[8],
         outcome_type='count',
         lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
@@ -644,10 +644,10 @@ def test_prism_w_count_outcome():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_count_outcome_auto_diff():
+def test_prism_torch_count_outcome_auto_diff():
     X, Xk, _ = _make_synthetic(n=150, p=5, seed=41)
     y = _make_count_y(150, seed=41)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X=X, Xk=Xk, y=y, layers=[8],
         outcome_type='count',
         local_grad_method='auto_diff',
@@ -657,10 +657,10 @@ def test_prism_g_count_outcome_auto_diff():
     assert np.all(imp >= 0)
 
 
-def test_prism_g_count_outcome_bandwidth():
+def test_prism_torch_count_outcome_bandwidth():
     X, Xk, _ = _make_synthetic(n=150, p=5, seed=42)
     y = _make_count_y(150, seed=42)
-    imp = importance.prismGImportances(
+    imp = importance.prismTorchImportances(
         X=X, Xk=Xk, y=y, layers=[8],
         outcome_type='count',
         local_grad_method='bandwidth',
@@ -671,13 +671,13 @@ def test_prism_g_count_outcome_bandwidth():
 
 
 # ---------------------------------------------------------------------------
-# Categorical outcome — prismW (CrossEntropyLoss path)
+# Categorical outcome — grip2 (CrossEntropyLoss path)
 # ---------------------------------------------------------------------------
 
-def test_prism_w_cat_outcome():
+def test_grip2_cat_outcome():
     X, Xk, _ = _make_synthetic(n=150, p=5, seed=43)
     y = _make_cat_y(150, k=3, seed=43)
-    imp = importance.prismWImportances(
+    imp = importance.grip2Importances(
         X=X, Xk=Xk, y=y, layers=[8],
         lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
     )
@@ -686,13 +686,13 @@ def test_prism_w_cat_outcome():
 
 
 # ---------------------------------------------------------------------------
-# prismGLocalGradients — shape, finite values, both local_grad_method values
+# prismTorchLocalGradients — shape, finite values, both local_grad_method values
 # ---------------------------------------------------------------------------
 
-def test_prism_g_local_gradients_numeric_auto_diff():
+def test_prism_torch_local_gradients_numeric_auto_diff():
     """Returns (n, p) for numeric-only X with auto_diff."""
     X, Xk, y = _make_synthetic(n=100, p=5, seed=44)
-    grads = importance.prismGLocalGradients(
+    grads = importance.prismTorchLocalGradients(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
         lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
@@ -701,10 +701,10 @@ def test_prism_g_local_gradients_numeric_auto_diff():
     assert np.isfinite(grads).all()
 
 
-def test_prism_g_local_gradients_numeric_bandwidth():
+def test_prism_torch_local_gradients_numeric_bandwidth():
     """Returns (n, p) for numeric-only X with bandwidth finite difference."""
     X, Xk, y = _make_synthetic(n=100, p=5, seed=45)
-    grads = importance.prismGLocalGradients(
+    grads = importance.prismTorchLocalGradients(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='bandwidth',
         lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
@@ -713,12 +713,12 @@ def test_prism_g_local_gradients_numeric_bandwidth():
     assert np.isfinite(grads).all()
 
 
-def test_prism_g_local_gradients_cat_input():
+def test_prism_torch_local_gradients_cat_input():
     """Categorical input: p_ohe_x = p_numeric + sum(c_k - 1 per cat variable)."""
     # 3 numeric + 2-cat (1 ohe col) + 3-cat (2 ohe cols) → p_ohe_x = 3+1+2 = 6
     X, Xk, _ = _make_mixed_X(n=100, p_numeric=3, cat_cols=[2, 3], seed=46)
     y = pl.Series("y", np.random.default_rng(46).standard_normal(100))
-    grads = importance.prismGLocalGradients(
+    grads = importance.prismTorchLocalGradients(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
         lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
@@ -727,11 +727,11 @@ def test_prism_g_local_gradients_cat_input():
     assert np.isfinite(grads).all()
 
 
-def test_prism_g_local_gradients_count_outcome():
-    """prismGLocalGradients with Poisson count outcome."""
+def test_prism_torch_local_gradients_count_outcome():
+    """prismTorchLocalGradients with Poisson count outcome."""
     X, Xk, _ = _make_synthetic(n=100, p=5, seed=47)
     y = _make_count_y(100, seed=47)
-    grads = importance.prismGLocalGradients(
+    grads = importance.prismTorchLocalGradients(
         X=X, Xk=Xk, y=y, layers=[8],
         outcome_type='count',
         local_grad_method='auto_diff',
@@ -742,13 +742,13 @@ def test_prism_g_local_gradients_count_outcome():
 
 
 # ---------------------------------------------------------------------------
-# prismGWImportances — single-pass dual importances
+# prismGrip2Importances — single-pass dual importances
 # ---------------------------------------------------------------------------
 
-def test_prism_gw_returns_tuple_of_two_arrays():
-    """prismGWImportances returns a 2-tuple of numpy arrays."""
+def test_prism_grip2_returns_tuple_of_two_arrays():
+    """prismGrip2Importances returns a 2-tuple of numpy arrays."""
     X, Xk, y = _make_synthetic(n=100, p=5, seed=50)
-    result = importance.prismGWImportances(
+    result = importance.prismGrip2Importances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
         lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
@@ -759,10 +759,10 @@ def test_prism_gw_returns_tuple_of_two_arrays():
     assert isinstance(w_imp, np.ndarray)
 
 
-def test_prism_gw_shape_and_nonneg():
+def test_prism_grip2_shape_and_nonneg():
     """Both G and W importances have shape (2*p,) and are non-negative."""
     X, Xk, y = _make_synthetic(n=100, p=5, seed=51)
-    g_imp, w_imp = importance.prismGWImportances(
+    g_imp, w_imp = importance.prismGrip2Importances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
         lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
@@ -773,10 +773,10 @@ def test_prism_gw_shape_and_nonneg():
     assert np.all(w_imp >= 0)
 
 
-def test_prism_gw_bandwidth():
-    """prismGWImportances with bandwidth local_grad_method."""
+def test_prism_grip2_bandwidth():
+    """prismGrip2Importances with bandwidth local_grad_method."""
     X, Xk, y = _make_synthetic(n=100, p=5, seed=52)
-    g_imp, w_imp = importance.prismGWImportances(
+    g_imp, w_imp = importance.prismGrip2Importances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='bandwidth',
         lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
@@ -787,10 +787,10 @@ def test_prism_gw_bandwidth():
     assert np.all(w_imp >= 0)
 
 
-def test_prism_gw_g_and_w_differ():
+def test_prism_grip2_g_and_w_differ():
     """G and W importances use different scoring methods and must not be identical."""
     X, Xk, y = _make_synthetic(n=150, p=8, seed=53)
-    g_imp, w_imp = importance.prismGWImportances(
+    g_imp, w_imp = importance.prismGrip2Importances(
         X=X, Xk=Xk, y=y, layers=[16, 8],
         local_grad_method='auto_diff',
         lambda_path=np.logspace(0, -1, 5), epochs = 4, n_warmup = 0,
@@ -798,10 +798,10 @@ def test_prism_gw_g_and_w_differ():
     assert not np.allclose(g_imp, w_imp), "PRISM_g and PRISM_w should differ"
 
 
-def test_prism_gw_w_matches_standalone_prism_w_structure():
-    """W importances are group norms — all non-negative and finite, like standalone prismW."""
+def test_prism_grip2_w_matches_standalone_grip2_structure():
+    """W importances are group norms — all non-negative and finite, like standalone grip2."""
     X, Xk, y = _make_synthetic(n=100, p=5, seed=54)
-    _, w_imp = importance.prismGWImportances(
+    _, w_imp = importance.prismGrip2Importances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
         lambda_path=np.logspace(0, -1, 4), epochs = 3, n_warmup = 0,
@@ -810,11 +810,11 @@ def test_prism_gw_w_matches_standalone_prism_w_structure():
     assert np.isfinite(w_imp).all()
 
 
-def test_prism_gw_cat_input():
-    """prismGWImportances with categorical input columns."""
+def test_prism_grip2_cat_input():
+    """prismGrip2Importances with categorical input columns."""
     X, Xk, p = _make_mixed_X(n=150, p_numeric=3, cat_cols=[2, 3], seed=55)
     y = pl.Series("y", np.random.default_rng(55).standard_normal(150))
-    g_imp, w_imp = importance.prismGWImportances(
+    g_imp, w_imp = importance.prismGrip2Importances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
         lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
@@ -825,11 +825,11 @@ def test_prism_gw_cat_input():
     assert np.all(w_imp >= 0)
 
 
-def test_prism_gw_cat_output():
-    """prismGWImportances with categorical outcome (CrossEntropyLoss path)."""
+def test_prism_grip2_cat_output():
+    """prismGrip2Importances with categorical outcome (CrossEntropyLoss path)."""
     X, Xk, _ = _make_synthetic(n=150, p=5, seed=56)
     y = _make_cat_y(150, k=3, seed=56)
-    g_imp, w_imp = importance.prismGWImportances(
+    g_imp, w_imp = importance.prismGrip2Importances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
         lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
@@ -840,11 +840,11 @@ def test_prism_gw_cat_output():
     assert np.all(w_imp >= 0)
 
 
-def test_prism_gw_count_outcome():
-    """prismGWImportances with Poisson count outcome."""
+def test_prism_grip2_count_outcome():
+    """prismGrip2Importances with Poisson count outcome."""
     X, Xk, _ = _make_synthetic(n=150, p=5, seed=57)
     y = _make_count_y(150, seed=57)
-    g_imp, w_imp = importance.prismGWImportances(
+    g_imp, w_imp = importance.prismGrip2Importances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
         lambda_path=_LAMBDA_PATH_SHORT, epochs = 3, n_warmup = 0,
@@ -855,13 +855,13 @@ def test_prism_gw_count_outcome():
     assert np.all(w_imp >= 0)
 
 
-def test_prism_gw_snapshot_count_matches_lambda_stages():
+def test_prism_grip2_snapshot_count_matches_lambda_stages():
     """Each lambda stage produces one G snapshot and one W snapshot."""
     X, Xk, y = _make_synthetic(n=100, p=5, seed=58)
     lambda_path = np.logspace(0, -1, 6)
     # Both outputs are means over 6 snapshots; we can't inspect them directly,
     # but running without error and returning the right shape confirms the counts match.
-    g_imp, w_imp = importance.prismGWImportances(
+    g_imp, w_imp = importance.prismGrip2Importances(
         X=X, Xk=Xk, y=y, layers=[8],
         local_grad_method='auto_diff',
         lambda_path=lambda_path, epochs = 3, n_warmup = 0,
@@ -876,7 +876,7 @@ def test_prism_gw_snapshot_count_matches_lambda_stages():
 # concatenated [X, Xk] frame -- get_oheDict's documented canonical order for a
 # single encoded frame -- which only coincides with an X-then-Xk split when a
 # dataset has no categorical columns. wFromImportances, calculatorOps.py's
-# torch_prism_gw row-builder, and _PRISMNetworkPairwise/_PRISMNetworkAdditive's
+# torch_prism_grip2 row-builder, and _PRISMNetworkPairwise/_PRISMNetworkAdditive's
 # `p = input_size // 2` split all assume the latter. Shape/non-negativity
 # checks (used everywhere else in this file) can't catch an ordering bug, since
 # they're identical regardless of internal group order -- these tests assert
@@ -945,8 +945,8 @@ def test_prism_setup_layout_matches_synth_sweep_shape():
 #
 # Swapping ALL feature/knockoff pairs simultaneously (pass Xk as X and X as Xk)
 # with the SAME rng seed is the composition of swapping every individual j, so
-# it exercises the same coupled-randomness property the reference prism_g.py/
-# prism_w.py docstrings prove architecturally. This is an optimization-
+# it exercises the same coupled-randomness property the reference prism_torch.py/
+# grip2.py docstrings prove architecturally. This is an optimization-
 # dependent (not exactly-zero-tolerance) property -- it only holds once
 # training has moved enough beyond the shared random initialization for the
 # loss landscape's symmetry (rather than the arbitrary un-swapped initial
@@ -977,53 +977,53 @@ def _assert_flip_sign(W: np.ndarray, W_swapped: np.ndarray, j: int = 0) -> None:
 
 
 @pytest.mark.parametrize("model_type", ["mlp", "pairwise", "additive"])
-def test_prism_g_antisymmetry_continuous(model_type):
+def test_prism_torch_antisymmetry_continuous(model_type):
     Xdf, Xkdf, yS = _make_signal_XXk(seed=100)
     kwargs = dict(
         layers=[8], epochs=300, n_warmup=1000,
         model_type=model_type, lambda_path=_ANTISYM_LAMBDA_PATH,
     )
-    imp = importance.prismGImportances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(99), **kwargs)
+    imp = importance.prismTorchImportances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(99), **kwargs)
     W = importance.wFromImportances(imp)
 
-    imp_sw = importance.prismGImportances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(99), **kwargs)
+    imp_sw = importance.prismTorchImportances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(99), **kwargs)
     W_sw = importance.wFromImportances(imp_sw)
 
     _assert_flip_sign(W, W_sw)
 
 
 @pytest.mark.parametrize("model_type", ["mlp", "pairwise", "additive"])
-def test_prism_w_antisymmetry_continuous(model_type):
+def test_grip2_antisymmetry_continuous(model_type):
     Xdf, Xkdf, yS = _make_signal_XXk(seed=101)
     kwargs = dict(
         layers=[8], epochs=300, n_warmup=1000,
         model_type=model_type, lambda_path=_ANTISYM_LAMBDA_PATH,
     )
-    imp = importance.prismWImportances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(98), **kwargs)
+    imp = importance.grip2Importances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(98), **kwargs)
     W = importance.wFromImportances(imp)
 
-    imp_sw = importance.prismWImportances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(98), **kwargs)
+    imp_sw = importance.grip2Importances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(98), **kwargs)
     W_sw = importance.wFromImportances(imp_sw)
 
     _assert_flip_sign(W, W_sw)
 
 
 @pytest.mark.parametrize("model_type", ["mlp", "pairwise", "additive"])
-def test_prism_gw_antisymmetry_continuous(model_type):
-    """Both the G and W halves of prismGWImportances must flip sign under swap."""
+def test_prism_grip2_antisymmetry_continuous(model_type):
+    """Both the G and W halves of prismGrip2Importances must flip sign under swap."""
     Xdf, Xkdf, yS = _make_signal_XXk(seed=102)
     kwargs = dict(
         layers=[8], epochs=300, n_warmup=1000,
         model_type=model_type, lambda_path=_ANTISYM_LAMBDA_PATH,
     )
-    g_imp, w_imp = importance.prismGWImportances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(97), **kwargs)
-    g_imp_sw, w_imp_sw = importance.prismGWImportances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(97), **kwargs)
+    g_imp, w_imp = importance.prismGrip2Importances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(97), **kwargs)
+    g_imp_sw, w_imp_sw = importance.prismGrip2Importances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(97), **kwargs)
 
     _assert_flip_sign(importance.wFromImportances(g_imp), importance.wFromImportances(g_imp_sw))
     _assert_flip_sign(importance.wFromImportances(w_imp), importance.wFromImportances(w_imp_sw))
 
 
-def test_prism_g_antisymmetry_categorical_outcome():
+def test_prism_torch_antisymmetry_categorical_outcome():
     """Flip-sign property with a categorical (multiclass) outcome."""
     n, p = 300, 5
     X = np.random.default_rng(103).standard_normal((n, p))
@@ -1038,10 +1038,10 @@ def test_prism_g_antisymmetry_categorical_outcome():
         layers=[8], epochs=300, n_warmup=1000,
         model_type='mlp', lambda_path=_ANTISYM_LAMBDA_PATH,
     )
-    imp = importance.prismGImportances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(96), **kwargs)
+    imp = importance.prismTorchImportances(X=Xdf, Xk=Xkdf, y=yS, rng=np.random.default_rng(96), **kwargs)
     W = importance.wFromImportances(imp)
 
-    imp_sw = importance.prismGImportances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(96), **kwargs)
+    imp_sw = importance.prismTorchImportances(X=Xkdf, Xk=Xdf, y=yS, rng=np.random.default_rng(96), **kwargs)
     W_sw = importance.wFromImportances(imp_sw)
 
     _assert_flip_sign(W, W_sw)
@@ -1100,7 +1100,7 @@ def test_calibrate_conflicts_with_explicit_path_params(conflicting_kwarg):
     of the parameters calibration itself determines."""
     X, Xk, y = _make_synthetic()
     with pytest.raises(ValueError, match="calibrate=True determines"):
-        importance.prismWImportances(
+        importance.grip2Importances(
             X=X, Xk=Xk, y=y, layers=[8],
             calibrate=True, epochs=3, n_warmup=0,
             **conflicting_kwarg,
@@ -1117,7 +1117,7 @@ def test_n_blocks_conflicts_with_explicit_path(path_kwarg):
     calibrate or not."""
     X, Xk, y = _make_synthetic()
     with pytest.raises(ValueError, match="n_blocks only applies"):
-        importance.prismWImportances(
+        importance.grip2Importances(
             X=X, Xk=Xk, y=y, layers=[8],
             n_blocks=5, epochs=3, n_warmup=0,
             **path_kwarg,

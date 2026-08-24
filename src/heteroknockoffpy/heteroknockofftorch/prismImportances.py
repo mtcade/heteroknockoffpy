@@ -190,7 +190,7 @@ def _prismImportances_categorical_t(
     cat_ohe_vals: dict[ int, tuple[ float, float ] ] | None = None,
     ) -> torch.Tensor:
     """
-    PRISM-G importance for a categorical outcome via full Jacobian + Mahalanobis distance.
+    Torch PRISM importance for a categorical outcome via full Jacobian + Mahalanobis distance.
 
     For each (sample, OHE input column): computes the Mahalanobis distance of the
     logit-contrast Jacobian, where contrasts are taken relative to the first category.
@@ -239,7 +239,7 @@ def _prism_setup(
     drop_first: bool,
     ) -> tuple:
     """
-    Shared setup for prismWImportances and prismGImportances.
+    Shared setup for grip2Importances and prismTorchImportances.
 
     Returns (X_all_np, y_np, groups, oheDict, loss_func, output_dimension, outcomeDescriptor).
     """
@@ -261,7 +261,7 @@ def _prism_setup(
 
     # -- OHE-encode X and Xk independently (not a single concatenated frame), so
     #    X_all_np/groups/oheDict lay out as [X's own columns, Xk's own columns] --
-    #    the contract assumed by wFromImportances, calculatorOps.py's torch_prism_gw
+    #    the contract assumed by wFromImportances, calculatorOps.py's torch_prism_grip2
     #    row-building, and _PRISMNetworkPairwise/_PRISMNetworkAdditive's
     #    `p = input_size // 2` split. Encoding a single concatenated frame instead
     #    groups columns by numeric-vs-categorical across X and Xk jointly (per
@@ -454,7 +454,7 @@ def _resolve_lambda_a_path(
 #/def _resolve_lambda_a_path
 
 
-def prismWImportances(
+def grip2Importances(
     X: DataFrameLike,
     Xk: DataFrameLike,
     y: SeriesOrDataFrameLike,
@@ -487,7 +487,7 @@ def prismWImportances(
     categorical_collapse_method: Literal['l2_norm','range'] = 'l2_norm',
     ) -> np.ndarray:
     """
-    PRISM-W importances: average of group-norm snapshots over a lambda regularization path.
+    GRIP2 importances: average of group-norm snapshots over a lambda regularization path.
 
     Trains a single MLP on [X, Xk] → y with an adaptive proximal penalty on the input layer.
     At the end of each lambda stage the group norms are recorded; the final importances are
@@ -619,10 +619,10 @@ def prismWImportances(
     )
 
     return np.mean( snapshots, axis = 0 )
-#/def prismWImportances
+#/def grip2Importances
 
 
-def prismWImportancesPerOHE(
+def grip2ImportancesPerOHE(
     X: DataFrameLike,
     Xk: DataFrameLike,
     y: SeriesOrDataFrameLike,
@@ -654,10 +654,10 @@ def prismWImportancesPerOHE(
     rng: np.random.Generator | None = None,
     ) -> np.ndarray:
     """
-    PRISM-W importances, but every OHE dummy column is treated as its own independent
+    GRIP2 importances, but every OHE dummy column is treated as its own independent
     variable instead of being grouped back to one score per original variable.
 
-    Identical training procedure to prismWImportances, except `groups` is built as one
+    Identical training procedure to grip2Importances, except `groups` is built as one
     singleton per OHE column (a categorical variable's dummy columns are NOT bundled
     into a shared group), so group_regularization/get_group_importances regularize and
     report each dummy column independently. Collinearity between dummies of the same
@@ -667,7 +667,7 @@ def prismWImportancesPerOHE(
     a per-dummy treatment.
 
     :param model_type: 'mlp' or 'pairwise' only.
-    :param lambda_path: Sequence of lambda values. See `prismWImportances`'s docstring --
+    :param lambda_path: Sequence of lambda values. See `grip2Importances`'s docstring --
         if None (default), a fresh path of `n_blocks` values is drawn from
         LogUniform(1e-3, 1e-1) via `rng` at call time.
     :param a_path: Per-stage input-layer penalty values. If None, drawn independently
@@ -723,7 +723,7 @@ def prismWImportancesPerOHE(
 
     if model_type not in ( 'mlp', 'pairwise' ):
         raise ValueError(
-            "prismWImportancesPerOHE only supports model_type in ('mlp','pairwise'); "
+            "grip2ImportancesPerOHE only supports model_type in ('mlp','pairwise'); "
             "got {!r}".format( model_type )
         )
     #
@@ -795,10 +795,10 @@ def prismWImportancesPerOHE(
     )
 
     return np.mean( snapshots, axis = 0 )
-#/def prismWImportancesPerOHE
+#/def grip2ImportancesPerOHE
 
 
-def prismGImportances(
+def prismTorchImportances(
     X: DataFrameLike,
     Xk: DataFrameLike,
     y: SeriesOrDataFrameLike,
@@ -833,9 +833,9 @@ def prismGImportances(
     rng: np.random.Generator | None = None,
     ) -> np.ndarray:
     """
-    PRISM-G importances: average of PRISM local-gradient snapshots over a lambda path.
+    Torch PRISM importances: average of PRISM local-gradient snapshots over a lambda path.
 
-    Same training procedure as prismWImportances; at the end of each lambda stage the
+    Same training procedure as grip2Importances; at the end of each lambda stage the
     PRISM importances (auto_diff or bandwidth) of the current model are recorded.
     Delegates snapshot computation to _prismImportances_t.
 
@@ -846,7 +846,7 @@ def prismGImportances(
         difference statistic exactly once combined with `bandwidth=1.0` below -- X
         is already standardized to unit variance before this step, so a bandwidth of
         1.0 IS the proposal's "central difference at +/-1."
-    :param lambda_path: Sequence of lambda values. See `prismWImportances`'s docstring --
+    :param lambda_path: Sequence of lambda values. See `grip2Importances`'s docstring --
         if None (default), a fresh path of `n_blocks` values is drawn from
         LogUniform(1e-3, 1e-1) via `rng` at call time.
     :param a_path: Per-stage input-layer penalty values. If None, drawn independently
@@ -1013,10 +1013,10 @@ def prismGImportances(
     )
 
     return np.mean( snapshots, axis = 0 )
-#/def prismGImportances
+#/def prismTorchImportances
 
 
-def prismGWImportances(
+def prismGrip2Importances(
     X: DataFrameLike,
     Xk: DataFrameLike,
     y: SeriesOrDataFrameLike,
@@ -1052,21 +1052,21 @@ def prismGWImportances(
     categorical_collapse_method: Literal['l2_norm','range'] = 'l2_norm',
     ) -> tuple[ np.ndarray, np.ndarray ]:
     """
-    PRISM-G and PRISM-W importances from a single training pass.
+    Torch PRISM and GRIP2 importances from a single training pass.
 
-    Identical hyperparameters and model to prismGImportances / prismWImportances.
-    At each lambda stage the snapshot_fn records PRISM-W group norms as a side
-    effect while returning PRISM-G local-gradient importances as the primary snapshot.
+    Identical hyperparameters and model to prismTorchImportances / grip2Importances.
+    At each lambda stage the snapshot_fn records GRIP2 group norms as a side
+    effect while returning Torch PRISM local-gradient importances as the primary snapshot.
 
     :param model_type: see torchImportances.PRISMPredictionModel docstring for the full
         list ('mlp', 'pairwise', 'additive').
-    :param categorical_collapse_method: See `prismWImportances` -- applies only to
-        the PRISM-W side snapshots (`w_snapshots`); PRISM-G's own categorical
+    :param categorical_collapse_method: See `grip2Importances` -- applies only to
+        the GRIP2 side snapshots (`w_snapshots`); Torch PRISM's own categorical
         handling is unaffected.
-    :param local_grad_method: See `prismGImportances`. Default 'bandwidth'.
+    :param local_grad_method: See `prismTorchImportances`. Default 'bandwidth'.
     :param bandwidth: Used exactly as given, no auto-scaling from `n`. Default `1.0`,
         matching the proposal's central difference at +/-1 on standardized X.
-    :param lambda_path: See `prismWImportances` -- if None, drawn from
+    :param lambda_path: See `grip2Importances` -- if None, drawn from
         LogUniform(1e-3, 1e-1) via `rng`.
     :param a_path: If None, drawn independently from Uniform(0.3, 1) via `rng`.
     :param n_blocks: Number of BSS blocks/stages to draw when `lambda_path` is None
@@ -1099,10 +1099,10 @@ def prismGWImportances(
     :param calibrate_rmax: Target upper bound for that same ratio (`r_max`). Paper
         recommends 0.20 for exact/well-conditioned knockoffs, 1.0 (this function's
         default) for approximate/ill-conditioned ones. Only consulted when `calibrate=True`.
-    :param epochs: See `prismWImportances`'s docstring -- converted to a raw step budget,
+    :param epochs: See `grip2Importances`'s docstring -- converted to a raw step budget,
         distributed evenly across lambda stages in raw-step units. Ignored if `total_steps`
         is given.
-    :param total_steps: See `prismWImportances`'s docstring -- overrides the `epochs`-derived
+    :param total_steps: See `grip2Importances`'s docstring -- overrides the `epochs`-derived
         step budget with an exact step count.
     :param rng: Seeds the default lambda/a-path draw and torch's global RNG.
     :returns: (g_importances, w_importances) both of shape (2*p,).
@@ -1225,7 +1225,7 @@ def prismGWImportances(
     )
 
     return np.mean( g_snapshots, axis=0 ), np.mean( w_snapshots, axis=0 )
-#/def prismGWImportances
+#/def prismGrip2Importances
 
 
 def _get_localGrad_ohe_matrix_t(
@@ -1251,7 +1251,7 @@ def _get_localGrad_ohe_matrix_t(
     `_prismImportances_t`.
 
     `cat_ohe_vals`: per-OHE-column-index (0.0-value, 1.0-value) pair, standardized
-    the same way as `prismGImportances`'s `cat_ohe_vals` -- required whenever
+    the same way as `prismTorchImportances`'s `cat_ohe_vals` -- required whenever
     `X_all_t` has been standardized (its 0/1 dummy encoding no longer literally
     means 0.0/1.0), so the categorical branch below evaluates the reference/active
     states at the correct standardized values instead of raw 0.0/1.0. `None` keeps
@@ -1260,7 +1260,7 @@ def _get_localGrad_ohe_matrix_t(
     Only `output_dimension == 1` (continuous/count outcomes) is supported: for a
     multiclass outcome, `model.predict_t` returns (n, k) logits per sample, and
     there is no established single-column reduction of that into this function's
-    (n, p_ohe_x) per-sample-scalar-gradient contract (unlike prismGImportances,
+    (n, p_ohe_x) per-sample-scalar-gradient contract (unlike prismTorchImportances,
     which aggregates via a Mahalanobis distance into one importance number).
     """
     if output_dimension != 1:
@@ -1326,7 +1326,7 @@ def _get_localGrad_ohe_matrix_t(
 #/def _get_localGrad_ohe_matrix_t
 
 
-def prismGLocalGradients(
+def prismTorchLocalGradients(
     X:                 DataFrameLike,
     Xk:                DataFrameLike,
     y:                 SeriesOrDataFrameLike,
@@ -1360,7 +1360,7 @@ def prismGLocalGradients(
     rng:               np.random.Generator | None = None,
     ) -> np.ndarray:
     """
-    Train a PRISM-G network on (X, Xk, y) and return the per-sample local gradient
+    Train a Torch PRISM network on (X, Xk, y) and return the per-sample local gradient
     matrix for X only.
 
     Returns array of shape (n, p_ohe_x) where
@@ -1375,15 +1375,15 @@ def prismGLocalGradients(
     function's (n, p_ohe_x) per-sample-scalar-gradient contract.
 
     `lambda_path`/`a_path`/`bandwidth`/`rng` follow the same conventions as
-    `prismGImportances` -- see that docstring. X is standardized the same way as
-    `prismGImportances`/`prismGWImportances` before the local-gradient step.
+    `prismTorchImportances` -- see that docstring. X is standardized the same way as
+    `prismTorchImportances`/`prismGrip2Importances` before the local-gradient step.
 
-    `epochs`/`total_steps` also follow `prismWImportances`'s docstring: `epochs` is
+    `epochs`/`total_steps` also follow `grip2Importances`'s docstring: `epochs` is
     converted to a raw step budget distributed evenly (in raw-step units) across lambda
     stages; `total_steps`, if given, overrides that budget with an exact step count.
 
     `n_blocks`/`calibrate`/`lambda_min`/`lambda_max`/`a_min`/`a_max`/`calibrate_rmin`/
-    `calibrate_rmax` also follow `prismWImportances`'s docstring: `calibrate=True`
+    `calibrate_rmax` also follow `grip2Importances`'s docstring: `calibrate=True`
     derives `lambda_path` via GRIP2 Eq. 5's gradient-ratio calibration and is mutually
     exclusive with `lambda_path`/`a_path`/`lambda_min`/`lambda_max`/`a_min`/`a_max`
     (raises `ValueError` if any are given alongside it); `n_blocks` is mutually
@@ -1402,7 +1402,7 @@ def prismGLocalGradients(
 
     if outcomeDescriptor.outcome_type == 'categorical':
         raise NotImplementedError(
-            "prismGLocalGradients does not support categorical outcomes -- "
+            "prismTorchLocalGradients does not support categorical outcomes -- "
             "see _get_localGrad_ohe_matrix_t's docstring."
         )
     #
@@ -1423,7 +1423,7 @@ def prismGLocalGradients(
     # Standardized reference/active values for each categorical OHE column, so the
     # categorical branch of _get_localGrad_ohe_matrix_t evaluates at the correct
     # (standardized) 0/1 states instead of raw 0.0/1.0 -- same construction as
-    # prismGImportances/prismGWImportances.
+    # prismTorchImportances/prismGrip2Importances.
     cat_ohe_vals: dict[ int, tuple[ float, float ] ] = {}
     for _col_idx in oheDict.values():
         if not isinstance( _col_idx, int ):
@@ -1484,4 +1484,4 @@ def prismGLocalGradients(
     )
 
     return grad_t.cpu().numpy()
-#/def prismGLocalGradients
+#/def prismTorchLocalGradients
