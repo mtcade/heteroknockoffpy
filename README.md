@@ -157,7 +157,7 @@ imp = prismGImportances(
 )
 ```
 
-The regularization path defaults to `logspace(1, -2, 50)`; pass `lambda_path` and/or `a_path` to override. `epochs` is distributed evenly across stages.
+The regularization path defaults to `logspace(1, -2, 50)`; pass `lambda_path` and/or `a_path` to override. `epochs` is converted to a raw gradient-step budget (`epochs * ceil(n / batch_size)`) and distributed as evenly as possible in raw-step units (not whole epochs) across stages, so a block can end mid-epoch. Changing the number of stages (`lambda_path` length) redistributes this fixed total budget, it never changes it. Pass `total_steps` instead of `epochs` to pin the exact step count directly, independent of `n`/`batch_size`.
 
 ### PRISM-GW — `prismGWImportances`
 

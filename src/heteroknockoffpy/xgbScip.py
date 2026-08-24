@@ -191,6 +191,96 @@ def _fit_regression_forest(
 #/def _fit_regression_forest
 
 
+def _fit_zero_inflated_forest(
+    scip_pd: pd.DataFrame,
+    col: str,
+    rng: np.random.Generator | None,
+    model_kwargs: dict,
+    weight: np.ndarray | None = None,
+    ) -> tuple[ np.ndarray, np.ndarray, np.ndarray ]:
+    """
+        Two-part model for a sparse/zero-inflated numeric column `col`,
+        predicting from all other columns (which may already contain
+        knockoff columns):
+          1. XGBClassifier: P(col != 0 | rest).
+          2. XGBRegressor: E[col | col != 0, rest] -- fit on the nonzero
+             subset only, so the zero mass never pulls the nonzero part's
+             conditional mean toward zero.
+
+        Degenerate cases (col all-zero or all-nonzero in this fold) skip the
+        classifier fit and use a constant probability instead, since
+        XGBClassifier requires >= 2 classes.
+
+        :returns:
+            - prob_nonzero: length-n predicted P(col != 0), one per row.
+            - cond_exp: length-n conditional expectation from the
+                nonzero-fit regressor, predicted for every row (only used
+                where a knockoff draw comes out nonzero).
+            - residuals_nonzero: observed - predicted, nonzero rows only --
+                the pool used to perturb the nonzero part of the knockoff draw.
+    """
+    X_expl: pd.DataFrame = scip_pd.drop( columns = [ col ] )
+    y: np.ndarray = scip_pd[ col ].to_numpy().astype( np.float64 )
+    nonzero_mask: np.ndarray = ( y != 0.0 )
+    n: int = y.shape[0]
+
+    if nonzero_mask.all():
+        prob_nonzero: np.ndarray = np.ones( n )
+    elif not nonzero_mask.any():
+        prob_nonzero = np.zeros( n )
+    else:
+        classifier = _make_classifier( rng, **model_kwargs )
+        classifier.fit( X_expl, nonzero_mask.astype( np.int64 ), sample_weight = weight )
+        proba: np.ndarray = classifier.predict_proba( X_expl )
+        nonzero_class_pos: int = list( classifier.classes_ ).index( 1 )
+        prob_nonzero = proba[ :, nonzero_class_pos ]
+    #/if nonzero_mask.all()/elif/else
+
+    if not nonzero_mask.any():
+        return prob_nonzero, np.zeros( n ), np.zeros( 0 )
+    #
+
+    regressor = _make_regressor( rng, **model_kwargs )
+    nz_weight: np.ndarray | None = weight[ nonzero_mask ] if weight is not None else None
+    regressor.fit( X_expl.loc[ nonzero_mask ], y[ nonzero_mask ], sample_weight = nz_weight )
+
+    cond_exp: np.ndarray = regressor.predict( X_expl )
+    residuals_nonzero: np.ndarray = y[ nonzero_mask ] - regressor.predict( X_expl.loc[ nonzero_mask ] )
+
+    return prob_nonzero, cond_exp, residuals_nonzero
+#/def _fit_zero_inflated_forest
+
+
+def _draw_zero_inflated_knockoff(
+    cond_exp: np.ndarray,
+    prob_nonzero: np.ndarray,
+    residuals_nonzero: np.ndarray,
+    rng: np.random.Generator,
+    ) -> np.ndarray:
+    """
+        Draw a knockoff column from a fitted zero-inflated model
+        (`_fit_zero_inflated_forest`): a Bernoulli(prob_nonzero) draw decides
+        whether each row is zero or nonzero; nonzero rows get
+        `cond_exp + N(0, sd(residuals_nonzero, ddof=1))`. Always uses normal
+        residual perturbation for the nonzero part (mirrors
+        `residuals_method='normal'`) -- `residuals_nonzero` from a
+        single-class column (no nonzero rows observed) is empty, in which
+        case every draw is zero.
+    """
+    n: int = cond_exp.shape[0]
+    is_nonzero: np.ndarray = rng.random( n ) < prob_nonzero
+
+    if residuals_nonzero.size == 0:
+        return np.zeros( n )
+    #
+
+    std: float = residuals_nonzero.std( ddof = 1 ) if residuals_nonzero.size > 1 else 0.0
+    residual: np.ndarray = rng.normal( 0, std, size = n )
+
+    return np.where( is_nonzero, cond_exp + residual, 0.0 )
+#/def _draw_zero_inflated_knockoff
+
+
 def get_ohe_forest_probabilities_np(
     X: DataFrameLike,
     logit: bool = True,
@@ -394,7 +484,7 @@ def get_knockoffs_with_Xk_numeric(
 def get_knockoffs_SCIP(
     X: DataFrameLike,
     rng: np.random.Generator,
-    residuals_method: Literal['normal','permute',] = 'normal',
+    residuals_method: Literal['normal','permute','zero_inflated',] = 'normal',
     verbose: int = 0,
     verbose_prefix: str = '',
     weight: np.ndarray | None = None,
@@ -411,7 +501,14 @@ def get_knockoffs_SCIP(
 
         :param residuals_method: "normal" (default) -- knockoff residual is
             drawn from N(0, sd(residuals, ddof=1)) via `rng.normal` -- or
-            "permute" -- knockoff residual is `rng.permutation(residuals)`.
+            "permute" -- knockoff residual is `rng.permutation(residuals)` --
+            or "zero_inflated" -- for sparse numeric columns, each column is
+            modeled as a two-part P(col != 0 | rest) classifier + E[col |
+            col != 0, rest] regressor (`_fit_zero_inflated_forest`), and the
+            knockoff draw is a Bernoulli(P(col != 0)) gate around a
+            normal-perturbed nonzero draw (`_draw_zero_inflated_knockoff`).
+            Categorical columns are unaffected -- still the plain
+            probability-forest draw.
         :param kwargs: Forwarded to xgboost.XGBRegressor (numeric columns) /
             xgboost.XGBClassifier (categorical columns) -- see the module
             docstring for the relevant kwargs (max_depth, learning_rate,
@@ -422,7 +519,7 @@ def get_knockoffs_SCIP(
     """
     X = _resolve_df( X )
 
-    if residuals_method not in ( 'normal', 'permute' ):
+    if residuals_method not in ( 'normal', 'permute', 'zero_inflated' ):
         raise ValueError( "Unrecognized residuals_method={}".format( residuals_method ) )
     #
 
@@ -441,6 +538,14 @@ def get_knockoffs_SCIP(
             indices: np.ndarray = choices_from_weights( probs, rng = rng )
             scip_pd[ ko ] = pd.Categorical.from_codes( indices, categories = categories )
         #
+        elif residuals_method == 'zero_inflated':
+            prob_nonzero, cond_exp, residuals_nonzero = _fit_zero_inflated_forest(
+                scip_pd, col, rng, kwargs, weight = weight
+            )
+            scip_pd[ ko ] = _draw_zero_inflated_knockoff(
+                cond_exp, prob_nonzero, residuals_nonzero, rng,
+            )
+        #
         else:
             cond_exp: np.ndarray = _fit_regression_forest( scip_pd, col, rng, kwargs, weight = weight )
             residuals: np.ndarray = X[ col ].to_numpy().astype( np.float64 ) - cond_exp
@@ -451,7 +556,7 @@ def get_knockoffs_SCIP(
             else:
                 scip_pd[ ko ] = cond_exp + rng.permutation( residuals )
             #/if residuals_method == 'normal'/else
-        #/if dtype == pl.Categorical/else
+        #/if dtype == pl.Categorical/elif/else
     #/for col, dtype in X.schema.items()
 
     Xk_pd: pd.DataFrame = scip_pd[ [ col + '~' for col in X.columns ] ]

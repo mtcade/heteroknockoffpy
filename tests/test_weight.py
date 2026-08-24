@@ -122,11 +122,22 @@ def test_prism_torch_weight_shifts_importance_to_weighted_subpopulation():
     X, Xk, y, weight = _mixture_X_y(rng, n=200)
 
     kwargs = dict(
+        # epochs=100 (not the smaller value used elsewhere): the BSS loop now
+        # keeps a persistent deep-layer weight-decay term active throughout
+        # every block, including lambda_path=[0.0] (GRIP2 Remark 1) -- a
+        # too-short single block spends most of its steps fighting that decay
+        # rather than letting the weighted-vs-unweighted loss reshape the
+        # first-layer group norms, which washes out the effect under test.
         X=X, Xk=Xk, y=y, layers=[8],
-        lambda_path=[0.0], epochs=30, model_type='mlp', verbose=0,
+        lambda_path=[0.0], epochs=100, model_type='mlp', verbose=0,
     )
-    imp_weighted = importance.prismWImportances(**kwargs, weight=weight)
-    imp_unweighted = importance.prismWImportances(**kwargs)
+    # rng must be fixed and identical for both calls: without it, model init
+    # and minibatch/randperm draws fall back to torch's ambient global RNG
+    # state, which depends on what ran earlier in the process -- making the
+    # weighted-vs-unweighted comparison nondeterministic (order-dependent)
+    # instead of isolating the effect of `weight` alone.
+    imp_weighted = importance.prismWImportances(**kwargs, weight=weight, rng=np.random.default_rng(42))
+    imp_unweighted = importance.prismWImportances(**kwargs, rng=np.random.default_rng(42))
 
     ratio_weighted = imp_weighted[0] / max(imp_weighted[1], 1e-9)
     ratio_unweighted = imp_unweighted[0] / max(imp_unweighted[1], 1e-9)

@@ -491,7 +491,7 @@ def get_rangerSCIP(
 def get_xgbSCIP(
     X: DataFrameLike,
     rng: np.random.Generator,
-    residuals_method: Literal['normal','permute',] = 'normal',
+    residuals_method: Literal['normal','permute','zero_inflated',] = 'normal',
     verbose: int = 0,
     verbose_prefix: str = '',
     weight: np.ndarray | None = None,
@@ -509,7 +509,9 @@ def get_xgbSCIP(
             numeric residual draw (`rng.normal`/`rng.permutation`).
         :param residuals_method: "normal" (default) -- numeric knockoff residual
             drawn from `N(0, sd(residuals, ddof=1))` via `rng.normal` -- or
-            "permute" -- residual is `rng.permutation(residuals)`.
+            "permute" -- residual is `rng.permutation(residuals)` -- or
+            "zero_inflated" -- sparse-column two-part model, xgb_SCIP-only
+            (not supported by `get_rangerSCIP`); see `xgbScip.get_knockoffs_SCIP`.
         :param verbose: Verbosity level (0 = silent).
         :param verbose_prefix: String prepended to any verbose print output.
         :param kwargs: Forwarded to xgboost.XGBRegressor/XGBClassifier -- see
@@ -534,6 +536,53 @@ def get_xgbSCIP(
     )
 #/def get_xgbSCIP
 
+def get_glmSCIP(
+    X: DataFrameLike,
+    rng: np.random.Generator,
+    verbose: int = 0,
+    verbose_prefix: str = '',
+    weight: np.ndarray | None = None,
+    **kwargs,
+    ) -> pl.DataFrame:
+    """
+        Full sequential SCIP knockoff generation for sparse/zero-inflated,
+        all-numeric X using simple linear GLMs (`glmScip`) -- a lighter-weight
+        alternative to `get_xgbSCIP`'s tree-based `residuals_method=
+        'zero_inflated'`: L2-regularized logistic regression for P(col != 0)
+        plus either a Gamma GLM (log link) or a log-normal (Ridge on log(y))
+        model for E[col | col != 0] (`nonzero_model='gamma'`/`'exponential'`),
+        with the knockoff draw sampled directly from the fitted distribution
+        rather than via a residual perturbation. See `glmScip`'s module
+        docstring for the full description, why regularized linear models
+        are used here instead of plain MLE, and (for `nonzero_model=
+        'exponential'`) why predictions are clipped to the training nonzero
+        range by default (`clipped=True`).
+
+        Always zero-inflated (no `residuals_method` -- that only makes sense
+        for `xgbScip`'s dense/sparse residual-perturbation choice); raises if
+        X has any categorical columns.
+
+        :param X: Original data (numeric only).
+        :param rng: Used directly for both the P(nonzero) Bernoulli draw and
+            the nonzero draw (`rng.random`/`rng.gamma`/`rng.normal`).
+        :param kwargs: Forwarded to `glmScip.get_knockoffs_SCIP` --
+            `nonzero_model` ('gamma' default / 'exponential'), `clipped`
+            (bool, 'exponential' only), and `logistic_kwargs`/`nonzero_kwargs`
+            dicts forwarded in turn to `sklearn.linear_model.
+            LogisticRegression`/`GammaRegressor`/`Ridge`.
+    """
+    from . import glmScip
+
+    return glmScip.get_knockoffs_SCIP(
+        X = X,
+        rng = rng,
+        verbose = verbose,
+        verbose_prefix = verbose_prefix,
+        weight = weight,
+        **kwargs,
+    )
+#/def get_glmSCIP
+
 def get_knockoffs(
     X: DataFrameLike,
     method: Literal[
@@ -541,6 +590,7 @@ def get_knockoffs(
         "torch_GAN",
         "ranger_SCIP",
         "xgb_SCIP",
+        "glm_SCIP",
     ],
     rng: np.random.Generator,
     conditional_expectations: pl.DataFrame | None = None,
@@ -633,8 +683,18 @@ def get_knockoffs(
     #
     elif method == "xgb_SCIP":
         # kwargs may have 'residuals_method'
-        assert kwargs['residuals_method'] in ("permute","normal",)
+        assert kwargs['residuals_method'] in ("permute","normal","zero_inflated",)
         Xk = get_xgbSCIP(
+            X = X,
+            rng = rng,
+            verbose = verbose,
+            verbose_prefix = verbose_prefix,
+            weight = weight,
+            **kwargs,
+        )
+    #
+    elif method == "glm_SCIP":
+        Xk = get_glmSCIP(
             X = X,
             rng = rng,
             verbose = verbose,

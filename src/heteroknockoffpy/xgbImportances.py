@@ -19,7 +19,7 @@ def _concat_X_Xk(X: pl.DataFrame, Xk: pl.DataFrame) -> pl.DataFrame:
             X,
             Xk.rename( { col: col + '~' for col in Xk.columns } ),
         ),
-        how = 'horizontal_extend',
+        how = 'horizontal',
     )
 #/def _concat_X_Xk
 
