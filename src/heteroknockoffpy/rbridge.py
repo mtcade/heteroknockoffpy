@@ -622,7 +622,7 @@ def rangerPrismImportances(
             X,
             Xk.rename( { col: col + '~' for col in Xk.columns } ),
         ),
-        how = 'horizontal',
+        how = 'horizontal_extend',
     )
 
     _r_code: str = _pkg_files( "heteroknockoffpy.scripts" ).joinpath( _script ).read_text()
