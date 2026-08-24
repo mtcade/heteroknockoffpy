@@ -5,7 +5,7 @@
 #//  Targeted regression tests for the optional `weight` parameter added
 #//  across knockoff/importance methods -- one test per underlying weighting
 #//  mechanism (xgboost sample_weight, ranger case.weights, sklearn
-#//  sample_weight, second_order's weighted mean/covariance, PRISM-torch's
+#//  sample_weight, second_order's weighted mean/covariance, torch-PRISM's
 #//  weighted loss). Not exhaustive -- see CLAUDE.md/the session plan for
 #//  the full per-function survey; this just proves weight is actually
 #//  reaching each mechanism, not merely accepted and ignored.
@@ -117,7 +117,7 @@ def test_second_order_weighted_covariance_matches_weighted_cluster():
     )
 
 
-def test_prism_torch_weight_shifts_importance_to_weighted_subpopulation():
+def test_torch_prism_weight_shifts_importance_to_weighted_subpopulation():
     rng = np.random.default_rng(5)
     X, Xk, y, weight = _mixture_X_y(rng, n=200)
 

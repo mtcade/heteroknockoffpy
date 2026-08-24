@@ -115,7 +115,7 @@ def get_withCallable(
         # Conditional residuals knockoffs. Routed through _processIsolation (rather
         # than a direct top-level import + call, as this used to do) because both
         # backends are _GUARDED_MODULES entries -- rpy2/xgboost crash on macOS if
-        # loaded into the same process as torch (e.g. after any prior PRISM-torch
+        # loaded into the same process as torch (e.g. after any prior torch-PRISM
         # or Deep-Knockoffs-GAN call), and a direct import here bypassed that guard.
         if conditional_expectations is None:
             conditional_expectations: pl.DataFrame = _processIsolation.run_isolated_if_loaded(

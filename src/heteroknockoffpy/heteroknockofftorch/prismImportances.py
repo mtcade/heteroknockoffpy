@@ -239,7 +239,7 @@ def _prism_setup(
     drop_first: bool,
     ) -> tuple:
     """
-    Shared setup for grip2Importances and prismTorchImportances.
+    Shared setup for grip2Importances and torchPrismImportances.
 
     Returns (X_all_np, y_np, groups, oheDict, loss_func, output_dimension, outcomeDescriptor).
     """
@@ -798,7 +798,7 @@ def grip2ImportancesPerOHE(
 #/def grip2ImportancesPerOHE
 
 
-def prismTorchImportances(
+def torchPrismImportances(
     X: DataFrameLike,
     Xk: DataFrameLike,
     y: SeriesOrDataFrameLike,
@@ -1013,7 +1013,7 @@ def prismTorchImportances(
     )
 
     return np.mean( snapshots, axis = 0 )
-#/def prismTorchImportances
+#/def torchPrismImportances
 
 
 def prismGrip2Importances(
@@ -1054,7 +1054,7 @@ def prismGrip2Importances(
     """
     Torch PRISM and GRIP2 importances from a single training pass.
 
-    Identical hyperparameters and model to prismTorchImportances / grip2Importances.
+    Identical hyperparameters and model to torchPrismImportances / grip2Importances.
     At each lambda stage the snapshot_fn records GRIP2 group norms as a side
     effect while returning Torch PRISM local-gradient importances as the primary snapshot.
 
@@ -1063,7 +1063,7 @@ def prismGrip2Importances(
     :param categorical_collapse_method: See `grip2Importances` -- applies only to
         the GRIP2 side snapshots (`w_snapshots`); Torch PRISM's own categorical
         handling is unaffected.
-    :param local_grad_method: See `prismTorchImportances`. Default 'bandwidth'.
+    :param local_grad_method: See `torchPrismImportances`. Default 'bandwidth'.
     :param bandwidth: Used exactly as given, no auto-scaling from `n`. Default `1.0`,
         matching the proposal's central difference at +/-1 on standardized X.
     :param lambda_path: See `grip2Importances` -- if None, drawn from
@@ -1251,7 +1251,7 @@ def _get_localGrad_ohe_matrix_t(
     `_prismImportances_t`.
 
     `cat_ohe_vals`: per-OHE-column-index (0.0-value, 1.0-value) pair, standardized
-    the same way as `prismTorchImportances`'s `cat_ohe_vals` -- required whenever
+    the same way as `torchPrismImportances`'s `cat_ohe_vals` -- required whenever
     `X_all_t` has been standardized (its 0/1 dummy encoding no longer literally
     means 0.0/1.0), so the categorical branch below evaluates the reference/active
     states at the correct standardized values instead of raw 0.0/1.0. `None` keeps
@@ -1260,7 +1260,7 @@ def _get_localGrad_ohe_matrix_t(
     Only `output_dimension == 1` (continuous/count outcomes) is supported: for a
     multiclass outcome, `model.predict_t` returns (n, k) logits per sample, and
     there is no established single-column reduction of that into this function's
-    (n, p_ohe_x) per-sample-scalar-gradient contract (unlike prismTorchImportances,
+    (n, p_ohe_x) per-sample-scalar-gradient contract (unlike torchPrismImportances,
     which aggregates via a Mahalanobis distance into one importance number).
     """
     if output_dimension != 1:
@@ -1326,7 +1326,7 @@ def _get_localGrad_ohe_matrix_t(
 #/def _get_localGrad_ohe_matrix_t
 
 
-def prismTorchLocalGradients(
+def torchPrismLocalGradients(
     X:                 DataFrameLike,
     Xk:                DataFrameLike,
     y:                 SeriesOrDataFrameLike,
@@ -1375,8 +1375,8 @@ def prismTorchLocalGradients(
     function's (n, p_ohe_x) per-sample-scalar-gradient contract.
 
     `lambda_path`/`a_path`/`bandwidth`/`rng` follow the same conventions as
-    `prismTorchImportances` -- see that docstring. X is standardized the same way as
-    `prismTorchImportances`/`prismGrip2Importances` before the local-gradient step.
+    `torchPrismImportances` -- see that docstring. X is standardized the same way as
+    `torchPrismImportances`/`prismGrip2Importances` before the local-gradient step.
 
     `epochs`/`total_steps` also follow `grip2Importances`'s docstring: `epochs` is
     converted to a raw step budget distributed evenly (in raw-step units) across lambda
@@ -1402,7 +1402,7 @@ def prismTorchLocalGradients(
 
     if outcomeDescriptor.outcome_type == 'categorical':
         raise NotImplementedError(
-            "prismTorchLocalGradients does not support categorical outcomes -- "
+            "torchPrismLocalGradients does not support categorical outcomes -- "
             "see _get_localGrad_ohe_matrix_t's docstring."
         )
     #
@@ -1423,7 +1423,7 @@ def prismTorchLocalGradients(
     # Standardized reference/active values for each categorical OHE column, so the
     # categorical branch of _get_localGrad_ohe_matrix_t evaluates at the correct
     # (standardized) 0/1 states instead of raw 0.0/1.0 -- same construction as
-    # prismTorchImportances/prismGrip2Importances.
+    # torchPrismImportances/prismGrip2Importances.
     cat_ohe_vals: dict[ int, tuple[ float, float ] ] = {}
     for _col_idx in oheDict.values():
         if not isinstance( _col_idx, int ):
@@ -1484,4 +1484,4 @@ def prismTorchLocalGradients(
     )
 
     return grad_t.cpu().numpy()
-#/def prismTorchLocalGradients
+#/def torchPrismLocalGradients

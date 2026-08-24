@@ -6,8 +6,8 @@ import polars as pl
 
 from typing import Iterable, Literal, Sequence
 
-# The PRISM-torch family (grip2Importances, grip2ImportancesPerOHE, prismTorchImportances,
-# prismGrip2Importances, prismTorchLocalGradients) is implemented in heteroknockofftorch.prismImportances
+# The torch-PRISM family (grip2Importances, grip2ImportancesPerOHE, torchPrismImportances,
+# prismGrip2Importances, torchPrismLocalGradients) is implemented in heteroknockofftorch.prismImportances
 # so that importing this module never triggers `import torch` -- torch is only loaded when one
 # of these functions is actually called. See heteroknockofftorch/prismImportances.py for the
 # real implementations; the stubs below just forward with identical signatures/behavior.
@@ -321,7 +321,7 @@ def grip2ImportancesPerOHE(
 #/def grip2ImportancesPerOHE
 
 
-def prismTorchImportances(
+def torchPrismImportances(
     X: DataFrameLike,
     Xk: DataFrameLike,
     y: SeriesOrDataFrameLike,
@@ -442,7 +442,7 @@ def prismTorchImportances(
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
         'heteroknockoffpy.heteroknockofftorch.prismImportances',
-        'prismTorchImportances',
+        'torchPrismImportances',
         X = X, Xk = Xk, y = y,
         layers = layers,
         outcome_type = outcome_type,
@@ -474,7 +474,7 @@ def prismTorchImportances(
         weight = weight,
         rng = rng,
     )
-#/def prismTorchImportances
+#/def torchPrismImportances
 
 
 def prismGrip2Importances(
@@ -515,7 +515,7 @@ def prismGrip2Importances(
     """
     Torch PRISM and GRIP2 importances from a single training pass.
 
-    Identical hyperparameters and model to prismTorchImportances / grip2Importances.
+    Identical hyperparameters and model to torchPrismImportances / grip2Importances.
     At each lambda stage the snapshot_fn records GRIP2 group norms as a side
     effect while returning Torch PRISM local-gradient importances as the primary snapshot.
 
@@ -528,7 +528,7 @@ def prismGrip2Importances(
     :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
     :param model_type: see heteroknockofftorch.torchImportances.PRISMPredictionModel docstring
         for the full list ('mlp', 'pairwise', 'additive'). Default `'mlp'`.
-    :param local_grad_method: See `prismTorchImportances`. Default `'bandwidth'`.
+    :param local_grad_method: See `torchPrismImportances`. Default `'bandwidth'`.
     :param lambda_path: Sequence of lambda values. If None (default), drawn from
         LogUniform(1e-3, 1e-1) via `rng` -- see `grip2Importances`'s docstring.
     :param a_path: Per-stage input-layer penalty values. If None (default), drawn
@@ -634,7 +634,7 @@ def prismGrip2Importances(
 #/def prismGrip2Importances
 
 
-def prismTorchLocalGradients(
+def torchPrismLocalGradients(
     X:                 DataFrameLike,
     Xk:                DataFrameLike,
     y:                 SeriesOrDataFrameLike,
@@ -680,19 +680,19 @@ def prismTorchLocalGradients(
     Only continuous/count outcomes are supported: `outcome_type='categorical'`
     raises `NotImplementedError` -- there's no established reduction of a
     multiclass model's (n, k) logits into this function's (n, p_ohe_x)
-    per-sample-scalar-gradient contract (unlike `prismTorchImportances`, which
+    per-sample-scalar-gradient contract (unlike `torchPrismImportances`, which
     aggregates via Mahalanobis distance into one importance number).
 
-    Shares `prismTorchImportances`'s training-loop parameters -- see that docstring
+    Shares `torchPrismImportances`'s training-loop parameters -- see that docstring
     for details; this function differs only in defaulting `local_grad_method`
-    to `'bandwidth'` (same as `prismTorchImportances` now) and returning the raw
+    to `'bandwidth'` (same as `torchPrismImportances` now) and returning the raw
     per-sample gradient matrix (for X only) instead of the lambda-path-averaged
-    scalar importances. X is standardized the same way as `prismTorchImportances`.
+    scalar importances. X is standardized the same way as `torchPrismImportances`.
 
     :param X: Original data (numeric + `pl.Categorical` columns).
     :param Xk: Knockoffs of `X`, same schema.
     :param y: Outcome; scalar (continuous/count) Series/DataFrame.
-    :param layers: Hidden-layer widths for the MLP; see `prismTorchImportances`.
+    :param layers: Hidden-layer widths for the MLP; see `torchPrismImportances`.
     :param outcome_type: 'continuous'/'count'; inferred from `y` if omitted.
         'categorical' raises `NotImplementedError`.
     :param local_grad_method: 'auto_diff' (exact) or 'bandwidth' (finite difference).
@@ -757,7 +757,7 @@ def prismTorchLocalGradients(
     from . import _processIsolation
     return _processIsolation.run_isolated_if_loaded(
         'heteroknockoffpy.heteroknockofftorch.prismImportances',
-        'prismTorchLocalGradients',
+        'torchPrismLocalGradients',
         X = X, Xk = Xk, y = y,
         layers = layers,
         outcome_type = outcome_type,
@@ -788,7 +788,7 @@ def prismTorchLocalGradients(
         weight = weight,
         rng = rng,
     )
-#/def prismTorchLocalGradients
+#/def torchPrismLocalGradients
 
 
 def rangerGiniImportances(

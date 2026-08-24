@@ -162,17 +162,17 @@ imp = importance.grip2Importances(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
 assert imp.shape == (2,) and np.all(np.isfinite(imp)), imp
 assert {other_family!r} not in sys.modules, "grip2Importances leaked {other_family}"
 
-imp = importance.prismTorchImportances(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
+imp = importance.torchPrismImportances(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
 assert imp.shape == (2,) and np.all(np.isfinite(imp)), imp
-assert {other_family!r} not in sys.modules, "prismTorchImportances leaked {other_family}"
+assert {other_family!r} not in sys.modules, "torchPrismImportances leaked {other_family}"
 
 g, w = importance.prismGrip2Importances(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
 assert g.shape == (2,) and w.shape == (2,), (g, w)
 assert {other_family!r} not in sys.modules, "prismGrip2Importances leaked {other_family}"
 
-grads = importance.prismTorchLocalGradients(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
+grads = importance.torchPrismLocalGradients(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
 assert grads.shape[1] == 1, grads.shape
-assert {other_family!r} not in sys.modules, "prismTorchLocalGradients leaked {other_family}"
+assert {other_family!r} not in sys.modules, "torchPrismLocalGradients leaked {other_family}"
 
 imp = importance.grip2ImportancesPerOHE(X=X, Xk=Xk, y=y, layers=[8], epochs=3)
 assert imp.shape == (2,) and np.all(np.isfinite(imp)), imp
