@@ -1,6 +1,6 @@
 # heteroknockoffpy
 
-Knockoffs and importance measures for heterogeneous (mixed numeric/categorical) data, using conditional residuals and random forests.
+Knockoffs and importance measures for heterogeneous (mixed numeric/categorical) data
 
 Based on the knockoff filter framework ([Candès et al., 2018](https://academic.oup.com/jrsssb/article/80/3/551/7048447)).
 
@@ -119,13 +119,13 @@ Every importance function shares this common core of inputs:
 - **`y`** — Outcome; scalar (continuous/count) or categorical Series/DataFrame.
 - **`outcome_type`** — `'continuous'`/`'count'`/`'categorical'`; inferred from `y` if omitted.
 - **`verbose`** — Verbosity level (`0` = silent).
-- **`weight`** — Optional length-`n` sample weight. `None` (default) fits unweighted. For the PRISM-torch family (`grip2Importances`/`prismTorchImportances`/`prismGrip2Importances`/`grip2ImportancesPerOHE`), it's a per-sample multiplier on the training loss. For `rangerGiniImportances`/`rangerPrismImportances`, it's forwarded to `ranger::ranger`'s `case.weights` (resampling-probability weighting, not a loss multiplier). For `lassoImportances`/`ridgeImportances`/`elasticImportances`, it's forwarded as each underlying sklearn/statsmodels model's `sample_weight`. For the xgboost-based functions (`xgbImportances`/`xgbPrismImportances`/`xgbShapImportances`), it's xgboost's own native `sample_weight`.
+- **`weight`** — Optional length-`n` sample weight. `None` (default) fits unweighted. For the PRISM-torch family (`grip2Importances`/`torchPrismImportances`/`prismGrip2Importances`/`grip2ImportancesPerOHE`), it's a per-sample multiplier on the training loss. For `rangerGiniImportances`/`rangerPrismImportances`, it's forwarded to `ranger::ranger`'s `case.weights` (resampling-probability weighting, not a loss multiplier). For `lassoImportances`/`ridgeImportances`/`elasticImportances`, it's forwarded as each underlying sklearn/statsmodels model's `sample_weight`. For the xgboost-based functions (`xgbImportances`/`xgbPrismImportances`/`xgbShapImportances`), it's xgboost's own native `sample_weight`.
 
 All importance functions return a `np.ndarray` of length `2p` — scores for `[x_1, …, x_p, x̃_1, …, x̃_p]`. Use `wFromImportances` to convert these to knockoff W-statistics for variable selection.
 
 ### GRIP2 — `grip2Importances`
 
-Trains a single MLP on `[X, Xk]` while sweeping a lambda regularization path. Records first-layer column norms `‖W[:,j]‖₂` at the end of each lambda stage; the returned importances are the mean across all snapshots. Fast — no extra forward passes per snapshot.
+Trains a single MLP on `[X, Xk]` while sweeping a lambda/a regularization path. Records first-layer column norms `‖W[:,j]‖₂` at the end of each stage; the returned importances are the mean across all snapshots. Fast — no extra forward passes per snapshot.
 
 ```python
 from heteroknockoffpy.importance import grip2Importances
@@ -135,33 +135,41 @@ imp = grip2Importances(
     layers=[64, 32],
     outcome_type="continuous",   # "continuous" | "count" | "categorical" | None (inferred)
     model_type="mlp",            # "mlp" | "pairwise" | "additive"
+    calibrate=True,              # derive lambda_path from GRIP2 Eq. 5's gradient-ratio calibration
+    n_blocks=30,
     epochs=500,
 )
 ```
 
-### Torch PRISM — `prismTorchImportances`
+### Torch PRISM — `torchPrismImportances`
 
-Same training procedure as GRIP2. Records per-feature output sensitivity `φⱼ = mean|ŷ(x+σeⱼ) − ŷ(x−σeⱼ)| / 2σ` at each lambda stage. More directly tied to the model's predictions than GRIP2, but requires extra forward passes per snapshot.
+Same training procedure as GRIP2. Records per-feature output sensitivity `φⱼ = mean|ŷ(x+σeⱼ) − ŷ(x−σeⱼ)| / 2σ` at each stage. More directly tied to the model's predictions than GRIP2, but requires extra forward passes per snapshot.
 
 ```python
-from heteroknockoffpy.importance import prismTorchImportances
+from heteroknockoffpy.importance import torchPrismImportances
 
-imp = prismTorchImportances(
+imp = torchPrismImportances(
     X=X, Xk=Xk, y=y,
     layers=[64, 32],
     outcome_type="continuous",
-    local_grad_method="auto_diff",  # "auto_diff" | "bandwidth"
+    local_grad_method="auto_diff",  # "auto_diff" | "bandwidth" (default "bandwidth")
     bandwidth=None,                 # only used when local_grad_method="bandwidth"
     model_type="mlp",
+    calibrate=True,                 # derive lambda_path from GRIP2 Eq. 5's gradient-ratio calibration
+    n_blocks=30,
     epochs=500,
 )
 ```
 
-The regularization path defaults to `logspace(1, -2, 50)`; pass `lambda_path` and/or `a_path` to override. `epochs` is converted to a raw gradient-step budget (`epochs * ceil(n / batch_size)`) and distributed as evenly as possible in raw-step units (not whole epochs) across stages, so a block can end mid-epoch. Changing the number of stages (`lambda_path` length) redistributes this fixed total budget, it never changes it. Pass `total_steps` instead of `epochs` to pin the exact step count directly, independent of `n`/`batch_size`.
+`calibrate=True` runs GRIP2 Eq. 5's gradient-ratio calibration to pick `lambda_path`'s range instead of requiring `lambda_min`/`lambda_max` up front. After warmup finishes, it measures `‖∇_W R(θ; λ=1, a)‖ / ‖∇_W L_pred(θ)‖` — the ratio between the group-regularization penalty's gradient norm and the (unregularized) prediction loss's gradient norm, both taken w.r.t. the first-layer group weights, on the held-out warmup validation split (or the full data if none was held out) — averaged over a freshly drawn `a_path` (`n_blocks` values from `Uniform(a_min, a_max)`, default `0.3`–`1.0`). Because the penalty scales linearly in `lambda`, that one ratio (measured at `lambda=1`) is enough to solve directly for the `(lambda_min, lambda_max)` bounds that make the ratio span `[calibrate_rmin, calibrate_rmax]` (default `0.01`–`1.0`) — no candidate lambda values are actually trained during calibration itself. `lambda_path` is then drawn as `n_blocks` values from `LogUniform` over that calibrated range.
+
+With `calibrate=False`, the same two paths are drawn the same way but without the calibration step: `lambda_path` from `LogUniform(lambda_min, lambda_max)` (default `1e-3`–`1e-1`) and `a_path` from `Uniform(a_min, a_max)` (default `0.3`–`1.0`), each of length `n_blocks` (default `30`), both seeded by `rng`.
+
+Either way, training then proceeds in `n_blocks` sequential BSS stages, each stage `b` regularized with that stage's own `(lambda_path[b], a_path[b])` pair. `epochs` is converted to a raw gradient-step budget (`epochs * ceil(n / batch_size)`) and distributed as evenly as possible in raw-step units (not whole epochs) across those stages, so a stage can end mid-epoch. Changing `n_blocks`/`lambda_path` length redistributes this fixed total budget, it never changes it. Pass `total_steps` instead of `epochs` to pin the exact step count directly, independent of `n`/`batch_size`.
 
 ### PRISM-GRIP2 — `prismGrip2Importances`
 
-Trains the same model as Torch PRISM and GRIP2 but in a single pass, producing both sets of importances simultaneously. At each lambda stage the snapshot closure captures GRIP2 group norms as a side effect while returning Torch PRISM local-gradient importances as the primary snapshot. Roughly halves the compute cost of running both methods separately.
+Trains the same model as Torch PRISM and GRIP2 but in a single pass, producing both sets of importances simultaneously. At each stage the snapshot closure captures GRIP2 group norms as a side effect while returning Torch PRISM local-gradient importances as the primary snapshot. Roughly halves the compute cost of running both methods separately.
 
 Returns a 2-tuple `(g_importances, w_importances)`, each of shape `(2p,)`.
 
@@ -172,12 +180,14 @@ g_imp, w_imp = prismGrip2Importances(
     X=X, Xk=Xk, y=y,
     layers=[64, 32],
     outcome_type="continuous",
-    local_grad_method="bandwidth",  # "auto_diff" | "bandwidth"
+    local_grad_method="bandwidth",  # "auto_diff" | "bandwidth" (default "bandwidth")
+    calibrate=True,                 # derive lambda_path from GRIP2 Eq. 5's gradient-ratio calibration
+    n_blocks=30,
     epochs=500,
 )
 ```
 
-All parameters are identical to `prismTorchImportances`. `local_grad_method` is required (it governs the G snapshot; the W snapshot uses group norms and needs no gradient method).
+All parameters are identical to `torchPrismImportances`, including the `calibrate`/`n_blocks` regularization-path defaults described above. `local_grad_method` defaults to `'bandwidth'` and governs only the G (Torch PRISM) snapshot; the W (GRIP2) snapshot uses group norms and needs no gradient method.
 
 ### Lasso — `lassoImportances`
 
