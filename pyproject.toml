@@ -1,7 +1,7 @@
 [project]
 name = "heteroknockoffpy"
-version = "0.3.1"
-description = "Knockoffs and importances for heterogeneous data with conditional residuals and random forests"
+version = "0.3.2"
+description = "Variable selection with knockoffs for heterogeneous continuous, count, and categorical data"
 readme = "README.md"
 authors = [
     { name = "Evan Mason" }
