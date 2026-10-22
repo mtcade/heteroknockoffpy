@@ -389,7 +389,12 @@ def get_knockoffs_second_order_np(
     method: str = kwargs.pop( 'method', 'asdp' )
     if rng is not None:
         _seed: int = int( rng.integers( 1, 2**31 - 1 ) )
-        ro.r( 'set.seed' )( _seed )
+        # Inside a converter context like every other R call here: rpy2's
+        # conversion rules are a ContextVar, so a worker thread that didn't
+        # inherit the main thread's context (e.g. silverbrain-arrow's
+        # executor) has none.
+        with ro.default_converter.context():
+            ro.r( 'set.seed' )( _seed )
     #
 
     if weight is None:
