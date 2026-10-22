@@ -25,8 +25,22 @@ def _localGrad_forNumeric_t(
     #
     if drop_first_y:
         local_grad = local_grad[:, 1:] - local_grad[:, 0:1]
-    return torch.einsum( 'nk,kl,nl->n', local_grad, inv_cov_t, local_grad )
+    # 2026-10-20: return the Mahalanobis *norm* sqrt(d' Omega d) rather than the
+    # quadratic form, so averaging over rows gives the mean Mahalanobis norm --
+    # the vector analog of the scalar response's mean |d| (reduces to mean|d|/sd
+    # for a binary response), matching xgbImportances.prism_importances.
+    if False:
+        return torch.einsum( 'nk,kl,nl->n', local_grad, inv_cov_t, local_grad )
+    #
+    return _mahalanobis_norm_t( local_grad, inv_cov_t )
 #/def _localGrad_forNumeric_t
+
+
+def _mahalanobis_norm_t( d: torch.Tensor, inv_cov_t: torch.Tensor ) -> torch.Tensor:
+    """Row-wise Mahalanobis norm sqrt(d_i' Omega d_i) of an (n, k) tensor; the
+    quadratic form is clamped at 0 before the root to absorb round-off."""
+    return torch.einsum( 'nk,kl,nl->n', d, inv_cov_t, d ).clamp( min=0.0 ).sqrt()
+#/def _mahalanobis_norm_t
 
 
 def _ridge_inv_cov_t( cov: torch.Tensor ) -> torch.Tensor:
@@ -54,62 +68,186 @@ def _localGrad_forCategories_t(
     inv_cov_t: torch.Tensor | None = None,
     drop_first_y: bool = True,
     ohe_vals: dict[ int, tuple[ float, float ] ] | None = None,
+    level_freqs: torch.Tensor | None = None,
     ) -> torch.Tensor:
 
-    local_grad: torch.Tensor
+    # 2026-10-22: the per-row score is now the *frequency-weighted SD* of the
+    # fitted level predictions, sqrt( sum_k pi_k ( g_k - gbar )^2 ) with
+    # gbar = sum_k pi_k g_k (Omega-norm in place of the square for a categorical
+    # response). `level_freqs` holds pi_k in level order [reference (when
+    # drop_first), dummy_1, ...] -- pooled over the predictor and its knockoff
+    # (see _pooled_level_freqs) so it is swap-invariant; None means equal
+    # weights. Like the range it is shift- and relabel-invariant (so reference-
+    # invariant), but it is on the same scale as the per-SD continuous score:
+    # in an additive linear model both are the SD of the predictor's fitted
+    # contribution, and a binary predictor scores |beta| sqrt(pi(1-pi)), the
+    # coefficient of its standardized indicator. The range measured a full-
+    # support contrast against a one-SD slope, so null categorical scores
+    # outgrew active continuous ones and the single knockoff+ threshold lost
+    # power on both types (full_*_3 runs, see scratch/diff_2026-10-22_0.md).
+    # 2026-10-20: categorical predictors are scored over the K_j *valid level
+    # encodings* of the whole indicator block -- every non-reference level's
+    # one-hot pattern, plus the all-reference pattern when drop_first -- with no
+    # per-dummy spacing division:
+    #   - scalar response (inv_cov_t is None): the prediction range
+    #     max_k g(z^{j<-k}) - min_k g(z^{j<-k}), as in the paper and
+    #     xgbImportances.prism_importances (replaces the old SD-scaled
+    #     max |g(h) - g(ref)| contrast, which depended on the reference level).
+    #   - categorical response: the Omega-diameter
+    #     max_{k,l} ||g(z^{j<-k}) - g(z^{j<-l})||_Omega of the fitted
+    #     logit-contrast vectors (replaces the per-output signed max followed by
+    #     a quadratic form); reduces to range/sd for a binary response and does
+    #     not depend on the reference class or level labels.
+    # `ohe_vals` only supplies what "0" and "1" mean for each (possibly
+    # standardized) dummy column; None keeps literal 0.0/1.0.
+    if False:
+        local_grad: torch.Tensor
 
-    if ohe_vals is not None:
-        # Normalized plug-in: (f(active_h) - f(reference)) / spacing_h.
-        # Reference is always "all columns in j at norm0"; drop_first is irrelevant here
-        # because we never rely on it to define the reference — we compute it directly.
-        ref_X = X_t.clone()
-        for k in j:
-            ref_X[:, k] = ohe_vals[ k ][ 0 ]
-        ref_pred = model.predict_t( ref_X )                    # (n, output_dim)
-
-        scaled_diffs: list[ torch.Tensor ] = []
-        for h in range( len( j ) ):
-            act_X = X_t.clone()
+        if ohe_vals is not None:
+            # Normalized plug-in: (f(active_h) - f(reference)) / spacing_h.
+            # Reference is always "all columns in j at norm0"; drop_first is irrelevant here
+            # because we never rely on it to define the reference — we compute it directly.
+            ref_X = X_t.clone()
             for k in j:
-                act_X[:, k] = ohe_vals[ k ][ 0 ]
-            act_X[:, j[ h ] ] = ohe_vals[ j[ h ] ][ 1 ]
-            spacing_h = ohe_vals[ j[ h ] ][ 1 ] - ohe_vals[ j[ h ] ][ 0 ]
-            scaled_diffs.append( ( model.predict_t( act_X ) - ref_pred ) / spacing_h )
-        #
+                ref_X[:, k] = ohe_vals[ k ][ 0 ]
+            ref_pred = model.predict_t( ref_X )                    # (n, output_dim)
 
-        if len( scaled_diffs ) == 1:
-            local_grad = scaled_diffs[ 0 ]
+            scaled_diffs: list[ torch.Tensor ] = []
+            for h in range( len( j ) ):
+                act_X = X_t.clone()
+                for k in j:
+                    act_X[:, k] = ohe_vals[ k ][ 0 ]
+                act_X[:, j[ h ] ] = ohe_vals[ j[ h ] ][ 1 ]
+                spacing_h = ohe_vals[ j[ h ] ][ 1 ] - ohe_vals[ j[ h ] ][ 0 ]
+                scaled_diffs.append( ( model.predict_t( act_X ) - ref_pred ) / spacing_h )
+            #
+
+            if len( scaled_diffs ) == 1:
+                local_grad = scaled_diffs[ 0 ]
+            else:
+                # Pick the category with the largest absolute derivative, preserving sign.
+                stack = torch.stack( scaled_diffs, dim=2 )         # (n, output_dim, len(j))
+                idx   = stack.abs().argmax( dim=2, keepdim=True )
+                local_grad = stack.gather( dim=2, index=idx ).squeeze( 2 )
+            #
         else:
-            # Pick the category with the largest absolute derivative, preserving sign.
-            stack = torch.stack( scaled_diffs, dim=2 )         # (n, output_dim, len(j))
-            idx   = stack.abs().argmax( dim=2, keepdim=True )
-            local_grad = stack.gather( dim=2, index=idx ).squeeze( 2 )
+            # Legacy unnormalized plug-in: evaluate at 0/1, return amax - amin across all states.
+            preds: list[ torch.Tensor ] = []
+            for h in range( len( j ) ):
+                _X = X_t.clone()
+                _X[:, j ] = 0.0
+                _X[:, j[ h ] ] = 1.0
+                preds.append( model.predict_t( _X ) )
+            #
+            if drop_first:
+                _X = X_t.clone()
+                _X[:, j ] = 0.0
+                preds.append( model.predict_t( _X ) )
+            #
+            y_out = torch.stack( preds, dim=2 )                    # (n, output_dim, n_cats)
+            local_grad = y_out.amax( dim=2 ) - y_out.amin( dim=2 )
         #
-    else:
-        # Legacy unnormalized plug-in: evaluate at 0/1, return amax - amin across all states.
-        preds: list[ torch.Tensor ] = []
-        for h in range( len( j ) ):
-            _X = X_t.clone()
-            _X[:, j ] = 0.0
-            _X[:, j[ h ] ] = 1.0
-            preds.append( model.predict_t( _X ) )
+
+        if inv_cov_t is None:
+            return local_grad.reshape( -1 )
         #
-        if drop_first:
-            _X = X_t.clone()
-            _X[:, j ] = 0.0
-            preds.append( model.predict_t( _X ) )
-        #
-        y_out = torch.stack( preds, dim=2 )                    # (n, output_dim, n_cats)
-        local_grad = y_out.amax( dim=2 ) - y_out.amin( dim=2 )
+        if drop_first_y:
+            local_grad = local_grad[:, 1:] - local_grad[:, 0:1]
+        return torch.einsum( 'nk,kl,nl->n', local_grad, inv_cov_t, local_grad )
     #
 
-    if inv_cov_t is None:
-        return local_grad.reshape( -1 )
+    _zero = ( lambda k: ohe_vals[ k ][ 0 ] ) if ohe_vals is not None else ( lambda k: 0.0 )
+    _one  = ( lambda k: ohe_vals[ k ][ 1 ] ) if ohe_vals is not None else ( lambda k: 1.0 )
+
+    level_preds: list[ torch.Tensor ] = []
+    if drop_first:
+        _X = X_t.clone()
+        for k in j:
+            _X[:, k] = _zero( k )
+        level_preds.append( model.predict_t( _X ) )
     #
-    if drop_first_y:
-        local_grad = local_grad[:, 1:] - local_grad[:, 0:1]
-    return torch.einsum( 'nk,kl,nl->n', local_grad, inv_cov_t, local_grad )
+    for h in range( len( j ) ):
+        _X = X_t.clone()
+        for k in j:
+            _X[:, k] = _zero( k )
+        _X[:, j[ h ] ] = _one( j[ h ] )
+        level_preds.append( model.predict_t( _X ) )
+    #
+    y_out = torch.stack( level_preds, dim=-1 )                 # (n, output_dim, n_levels)
+    if y_out.ndim == 2:
+        y_out = y_out.unsqueeze( 1 )
+    #
+
+    # 2026-10-22: range / Omega-diameter replaced by the frequency-weighted SD
+    # (see top of function).
+    if False:
+        if inv_cov_t is None:
+            return ( y_out.amax( dim=-1 ) - y_out.amin( dim=-1 ) ).reshape( -1 )
+        #
+        if drop_first_y:
+            y_out = y_out[:, 1:, :] - y_out[:, 0:1, :]                # (n, k_y - 1, n_levels)
+        #
+        n_levels = y_out.shape[ -1 ]
+        diameter = torch.zeros( y_out.shape[ 0 ], device=y_out.device, dtype=y_out.dtype )
+        for a in range( n_levels ):
+            for b in range( a + 1, n_levels ):
+                diameter = torch.maximum(
+                    diameter, _mahalanobis_norm_t( y_out[:, :, a] - y_out[:, :, b], inv_cov_t ),
+                )
+            #
+        #
+        return diameter
+    #
+
+    n_levels = y_out.shape[ -1 ]
+    if level_freqs is None:
+        pi = torch.full( ( n_levels, ), 1.0 / n_levels, device=y_out.device, dtype=y_out.dtype )
+    else:
+        pi = level_freqs.to( device=y_out.device, dtype=y_out.dtype )
+        assert pi.shape[ 0 ] == n_levels, f"level_freqs has {pi.shape[0]} entries, expected {n_levels}"
+    #
+    if inv_cov_t is not None and drop_first_y:
+        y_out = y_out[:, 1:, :] - y_out[:, 0:1, :]                    # (n, k_y - 1, n_levels)
+    #
+    dev = y_out - ( y_out * pi ).sum( dim=-1, keepdim=True )          # (n, out, n_levels)
+    if inv_cov_t is None:
+        sq = ( dev ** 2 ).sum( dim=1 )                                # (n, n_levels); out == 1
+    else:
+        sq = torch.einsum( 'nak,ab,nbk->nk', dev, inv_cov_t, dev )    # Omega-norm^2 per level
+    #
+    return ( sq * pi ).sum( dim=-1 ).clamp( min=0.0 ).sqrt()
 #/def _localGrad_forCategories_t
+
+
+def _pooled_level_freqs(
+    X_all_np: np.ndarray,
+    oheDict: dict[ str, int | tuple[ int, ... ] ],
+    drop_first: bool,
+    ) -> dict[ tuple[ int, ... ], torch.Tensor ]:
+    """Level frequencies for each categorical group of the *raw* (unstandardized,
+    0/1) encoded [X, Xk] matrix, pooled over the predictor and its knockoff so
+    the weights are unchanged by swapping them -- the knockoff flip-sign property
+    needs T_j and T~_j to use the same weights. Keyed by the group's column-index
+    tuple; ordered [reference (when drop_first), dummy_1, ...] to match the level
+    order evaluated in _localGrad_forCategories_t. Relies on _prism_setup's
+    layout: X's groups, then Xk's groups in the same order and encoding.
+    """
+    groups = list( oheDict.values() )
+    half = len( groups ) // 2
+    freqs: dict[ tuple[ int, ... ], torch.Tensor ] = {}
+    for i, idx in enumerate( groups ):
+        if isinstance( idx, int ):
+            continue
+        #
+        partner = groups[ i + half ] if i < half else groups[ i - half ]
+        pooled = ( X_all_np[ :, list( idx ) ].mean( axis=0 ) + X_all_np[ :, list( partner ) ].mean( axis=0 ) ) / 2.0
+        if drop_first:
+            pooled = np.concatenate( ( [ 1.0 - pooled.sum() ], pooled ) )
+        #
+        freqs[ tuple( idx ) ] = torch.tensor( pooled, dtype=torch.float32 )
+    #
+    return freqs
+#/def _pooled_level_freqs
 
 
 def _prismImportances_t(
@@ -122,6 +260,7 @@ def _prismImportances_t(
     drop_first: bool = True,
     inv_cov_t: torch.Tensor | None = None,
     cat_ohe_vals: dict[ int, tuple[ float, float ] ] | None = None,
+    cat_level_freqs: dict[ tuple[ int, ... ], torch.Tensor ] | None = None,
     ) -> torch.Tensor:
     """
     Tensor-native PRISM importance computation. Returns shape (p_out,) tensor.
@@ -172,6 +311,7 @@ def _prismImportances_t(
                 drop_first = drop_first,
                 inv_cov_t = inv_cov_t,
                 ohe_vals = cat_ohe_vals,
+                level_freqs = cat_level_freqs.get( tuple( col_idx ) ) if cat_level_freqs is not None else None,
             )
         #
     #
@@ -188,6 +328,7 @@ def _prismImportances_categorical_t(
     exponent: float,
     drop_first: bool = True,
     cat_ohe_vals: dict[ int, tuple[ float, float ] ] | None = None,
+    cat_level_freqs: dict[ tuple[ int, ... ], torch.Tensor ] | None = None,
     ) -> torch.Tensor:
     """
     Torch PRISM importance for a categorical outcome via full Jacobian + Mahalanobis distance.
@@ -207,7 +348,12 @@ def _prismImportances_categorical_t(
     jac_contrasts = jac_t[:, 1:, :] - jac_t[:, 0:1, :]
     # Mahalanobis per (sample, OHE column): (n, p_ohe)
     # mahal[n, p] = jac_contrasts[n, :, p]^T @ inv_cov @ jac_contrasts[n, :, p]
-    mahal_t = torch.einsum( 'nmp, ml, nlp -> np', jac_contrasts, inv_cov_t, jac_contrasts )
+    # 2026-10-20: Mahalanobis norm (sqrt of the quadratic form), not the squared
+    # form -- see _localGrad_forNumeric_t.
+    if False:
+        mahal_t = torch.einsum( 'nmp, ml, nlp -> np', jac_contrasts, inv_cov_t, jac_contrasts )
+    #
+    mahal_t = torch.einsum( 'nmp, ml, nlp -> np', jac_contrasts, inv_cov_t, jac_contrasts ).clamp( min=0.0 ).sqrt()
 
     localGrad_t = torch.zeros( n, p_out, device=X_all_t.device )
     for j_out, col in enumerate( oheDict ):
@@ -222,6 +368,7 @@ def _prismImportances_categorical_t(
                 drop_first = drop_first,
                 inv_cov_t  = inv_cov_t,
                 ohe_vals   = cat_ohe_vals,
+                level_freqs = cat_level_freqs.get( tuple( col_idx ) ) if cat_level_freqs is not None else None,
             )
         #
     #
@@ -484,7 +631,8 @@ def grip2Importances(
     verbose: int = 0,
     weight: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
-    categorical_collapse_method: Literal['l2_norm','range'] = 'l2_norm',
+    # 2026-10-20: default changed 'l2_norm' -> 'rms_norm' (GRIP2 categorical score is the RMS column norm, matching the size-normalized group penalty)
+    categorical_collapse_method: Literal['l2_norm','range','rms_norm'] = 'rms_norm',
     ) -> np.ndarray:
     """
     GRIP2 importances: average of group-norm snapshots over a lambda regularization path.
@@ -498,7 +646,12 @@ def grip2Importances(
     :param categorical_collapse_method: How a categorical (multi-column OHE) group's
         per-category column norms collapse into one importance value; ignored for
         numeric (singleton) groups, which always use their own column norm.
-        - 'l2_norm' (default): ||w[:, group_j]||_F, the Frobenius norm of the whole
+        - 'rms_norm' (default; 2026-10-20): ||w[:, group_j]||_F / sqrt(|group_j|),
+          the root-mean-square of the group's per-column norms -- the same
+          group statistic the size-normalized group penalty acts on, so a
+          categorical group and a numeric singleton score alike at equal
+          per-column weight magnitude.
+        - 'l2_norm': ||w[:, group_j]||_F, the Frobenius norm of the whole
           group's weight block -- equivalently the L2 norm of the group's per-column
           norm vector. Aggregates signal across every category, so it's stronger
           when a categorical variable's true effect is spread across several/all of
@@ -917,6 +1070,10 @@ def torchPrismImportances(
         drop_first = drop_first,
     )
 
+    # 2026-10-22: pooled X/Xk level frequencies for the weighted-SD categorical
+    # score, from the raw 0/1 dummies (before standardization).
+    cat_level_freqs = _pooled_level_freqs( X_all_np, oheDict, drop_first )
+
     _mu = X_all_np.mean( axis=0 )
     _sd = np.maximum( X_all_np.std( axis=0 ), 1e-8 )
     X_all_np = ( X_all_np - _mu ) / _sd
@@ -964,6 +1121,7 @@ def torchPrismImportances(
                     exponent = exponent,
                     drop_first = drop_first,
                     cat_ohe_vals = cat_ohe_vals,
+                    cat_level_freqs = cat_level_freqs,
                 ).cpu().numpy()
             else:
                 return _prismImportances_t(
@@ -976,6 +1134,7 @@ def torchPrismImportances(
                     drop_first = drop_first,
                     inv_cov_t = inv_cov_t,
                     cat_ohe_vals = cat_ohe_vals,
+                    cat_level_freqs = cat_level_freqs,
                 ).cpu().numpy()
             #
         #/def snapshot_fn
@@ -990,6 +1149,7 @@ def torchPrismImportances(
                 exponent = exponent,
                 drop_first = drop_first,
                 cat_ohe_vals = cat_ohe_vals,
+                cat_level_freqs = cat_level_freqs,
             ).cpu().numpy()
         #/def snapshot_fn
     #
@@ -1049,7 +1209,8 @@ def prismGrip2Importances(
     verbose: int = 0,
     weight: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
-    categorical_collapse_method: Literal['l2_norm','range'] = 'l2_norm',
+    # 2026-10-20: default changed 'l2_norm' -> 'rms_norm' (GRIP2 categorical score is the RMS column norm, matching the size-normalized group penalty)
+    categorical_collapse_method: Literal['l2_norm','range','rms_norm'] = 'rms_norm',
     ) -> tuple[ np.ndarray, np.ndarray ]:
     """
     Torch PRISM and GRIP2 importances from a single training pass.
@@ -1125,6 +1286,10 @@ def prismGrip2Importances(
         drop_first = drop_first,
     )
 
+    # 2026-10-22: pooled X/Xk level frequencies for the weighted-SD categorical
+    # score, from the raw 0/1 dummies (before standardization).
+    cat_level_freqs = _pooled_level_freqs( X_all_np, oheDict, drop_first )
+
     _mu = X_all_np.mean( axis=0 )
     _sd = np.maximum( X_all_np.std( axis=0 ), 1e-8 )
     X_all_np = ( X_all_np - _mu ) / _sd
@@ -1175,6 +1340,7 @@ def prismGrip2Importances(
                     exponent = exponent,
                     drop_first = drop_first,
                     cat_ohe_vals = cat_ohe_vals,
+                    cat_level_freqs = cat_level_freqs,
                 ).cpu().numpy()
             else:
                 return _prismImportances_t(
@@ -1187,6 +1353,7 @@ def prismGrip2Importances(
                     drop_first = drop_first,
                     inv_cov_t = inv_cov_t,
                     cat_ohe_vals = cat_ohe_vals,
+                    cat_level_freqs = cat_level_freqs,
                 ).cpu().numpy()
             #
         #/def snapshot_fn
@@ -1202,6 +1369,7 @@ def prismGrip2Importances(
                 exponent = exponent,
                 drop_first = drop_first,
                 cat_ohe_vals = cat_ohe_vals,
+                cat_level_freqs = cat_level_freqs,
             ).cpu().numpy()
         #/def snapshot_fn
     #

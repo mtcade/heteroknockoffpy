@@ -58,7 +58,12 @@ def _group_importance(col_norms: torch.Tensor, categorical_collapse_method: str)
     value unchanged regardless of `categorical_collapse_method` -- the choice
     only matters for multi-column (categorical) groups:
 
-    - 'l2_norm' (default): Frobenius norm of the group's column-norm vector,
+    - 'rms_norm' (default for callers since 2026-10-20): `col_norms.norm() /
+      sqrt(len(col_norms))`, the root-mean-square column norm -- the same group
+      statistic `group_regularization` penalizes (mean of squared column norms,
+      raised to a/2), so score and penalty agree and a categorical group scores
+      like a numeric singleton at equal per-column weight magnitude.
+    - 'l2_norm': Frobenius norm of the group's column-norm vector,
       i.e. `sqrt(sum(col_norms**2))` -- identical to the L2/Frobenius norm of
       the whole underlying weight block. Aggregates signal across every
       column in the group, so it's stronger when a categorical variable's
@@ -77,10 +82,12 @@ def _group_importance(col_norms: torch.Tensor, categorical_collapse_method: str)
         return _range_importance(col_norms)
     elif categorical_collapse_method == 'l2_norm':
         return col_norms.norm().item()
+    elif categorical_collapse_method == 'rms_norm':
+        return ( col_norms.norm() / col_norms.numel() ** 0.5 ).item()
     #
     raise ValueError(
         f"Unrecognized categorical_collapse_method={categorical_collapse_method!r}; "
-        "expected 'l2_norm' or 'range'."
+        "expected 'rms_norm', 'l2_norm' or 'range'."
     )
 #/def _group_importance
 
@@ -194,7 +201,8 @@ class _PRISMNetworkBase(nn.Module, ABC):
 
     @abstractmethod
     def get_group_importances(
-        self, groups: list[list[int]], categorical_collapse_method: str = 'l2_norm',
+        # 2026-10-20: default changed 'l2_norm' -> 'rms_norm' (GRIP2 categorical score is the RMS column norm, matching the size-normalized group penalty)
+        self, groups: list[list[int]], categorical_collapse_method: str = 'rms_norm',
     ) -> np.ndarray: ...
 
     @abstractmethod
@@ -309,7 +317,8 @@ class _PRISMNetworkMLP(_PRISMNetworkBase):
     #/def group_regularization
 
     def get_group_importances(
-        self, groups: list[list[int]], categorical_collapse_method: str = 'l2_norm',
+        # 2026-10-20: default changed 'l2_norm' -> 'rms_norm' (GRIP2 categorical score is the RMS column norm, matching the size-normalized group penalty)
+        self, groups: list[list[int]], categorical_collapse_method: str = 'rms_norm',
     ) -> np.ndarray:
         with torch.no_grad():
             w = self.net[0].weight.detach().cpu()             # (H, 2p)
@@ -425,7 +434,8 @@ class _PRISMNetworkPairwise(_PRISMNetworkBase):
     #/def group_regularization
 
     def get_group_importances(
-        self, groups: list[list[int]], categorical_collapse_method: str = 'l2_norm',
+        # 2026-10-20: default changed 'l2_norm' -> 'rms_norm' (GRIP2 categorical score is the RMS column norm, matching the size-normalized group penalty)
+        self, groups: list[list[int]], categorical_collapse_method: str = 'rms_norm',
     ) -> np.ndarray:
         with torch.no_grad():
             col_norms = self.v.detach().cpu().abs()            # (2p,) T_j per OHE column
@@ -554,7 +564,8 @@ class _PRISMNetworkAdditive(_PRISMNetworkBase):
     #/def group_regularization
 
     def get_group_importances(
-        self, groups: list[list[int]], categorical_collapse_method: str = 'l2_norm',
+        # 2026-10-20: default changed 'l2_norm' -> 'rms_norm' (GRIP2 categorical score is the RMS column norm, matching the size-normalized group penalty)
+        self, groups: list[list[int]], categorical_collapse_method: str = 'rms_norm',
     ) -> np.ndarray:
         """
         T_j = ||W1[j,:,0]|| (X side) or ||W1[j,:,1]|| (Xk side) per column;
@@ -784,7 +795,8 @@ class PRISMPredictionModel:
         total_steps: int | None = None,
         snapshot_fn: Callable[['PRISMPredictionModel', torch.Tensor], np.ndarray] | None = None,
         weight: np.ndarray | None = None,
-        categorical_collapse_method: str = 'l2_norm',
+        # 2026-10-20: default changed 'l2_norm' -> 'rms_norm' (GRIP2 categorical score is the RMS column norm, matching the size-normalized group penalty)
+        categorical_collapse_method: str = 'rms_norm',
     ) -> list[np.ndarray]:
         """
         Train over the lambda_path; record one importance snapshot per lambda stage.
@@ -834,8 +846,8 @@ class PRISMPredictionModel:
             snapshot_fn is None -- ignored otherwise, since a custom snapshot_fn
             (e.g. Torch PRISM/PRISM-GRIP2's) is responsible for calling
             get_group_importances itself if it wants one. See
-            get_group_importances/_group_importance for what 'l2_norm' (default)
-            vs 'range' mean.
+            get_group_importances/_group_importance for what 'rms_norm' (default
+            since 2026-10-20), 'l2_norm' and 'range' mean.
         :param weight: Optional length-n sample weight (see `_weighted_loss`),
             applied to the main lambda_path/no-lambda-path training loop
             (the one that actually produces the returned snapshots) and to
@@ -1162,7 +1174,8 @@ class PRISMPredictionModel:
     def get_group_importances(
         self: Self,
         groups: list[list[int]],
-        categorical_collapse_method: str = 'l2_norm',
+        # 2026-10-20: default changed 'l2_norm' -> 'rms_norm' (GRIP2 categorical score is the RMS column norm, matching the size-normalized group penalty)
+        categorical_collapse_method: str = 'rms_norm',
     ) -> np.ndarray:
         return self.model.get_group_importances(groups, categorical_collapse_method)
     #/def get_group_importances

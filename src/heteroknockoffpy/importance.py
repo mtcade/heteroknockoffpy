@@ -42,7 +42,8 @@ def grip2Importances(
     verbose: int = 0,
     weight: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
-    categorical_collapse_method: Literal['l2_norm','range'] = 'l2_norm',
+    # 2026-10-20: default changed 'l2_norm' -> 'rms_norm' (GRIP2 categorical score is the RMS column norm, matching the size-normalized group penalty)
+    categorical_collapse_method: Literal['l2_norm','range','rms_norm'] = 'rms_norm',
     ) -> np.ndarray:
     """
     GRIP2 importances: average of group-norm snapshots over a lambda regularization path.
@@ -127,7 +128,12 @@ def grip2Importances(
     :param categorical_collapse_method: How a categorical (multi-column OHE) group's
         per-category column norms collapse into one importance value; ignored for
         numeric (singleton) groups, which always use their own column norm.
-        - 'l2_norm' (default): the Frobenius norm of the whole group's weight
+        - 'rms_norm' (default; 2026-10-20): ||w[:, group_j]||_F / sqrt(|group_j|),
+          the root-mean-square of the group's per-column norms -- the same
+          group statistic the size-normalized group penalty acts on, so a
+          categorical group and a numeric singleton score alike at equal
+          per-column weight magnitude.
+        - 'l2_norm': the Frobenius norm of the whole group's weight
           block (equivalently the L2 norm of the group's per-column norm vector).
           Aggregates signal across every category, so it's stronger when a
           categorical variable's true effect is spread across several/all of its
@@ -510,7 +516,8 @@ def prismGrip2Importances(
     verbose: int = 0,
     weight: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
-    categorical_collapse_method: Literal['l2_norm','range'] = 'l2_norm',
+    # 2026-10-20: default changed 'l2_norm' -> 'rms_norm' (GRIP2 categorical score is the RMS column norm, matching the size-normalized group penalty)
+    categorical_collapse_method: Literal['l2_norm','range','rms_norm'] = 'rms_norm',
     ) -> tuple[ np.ndarray, np.ndarray ]:
     """
     Torch PRISM and GRIP2 importances from a single training pass.
@@ -964,10 +971,13 @@ def xgbPrismImportances(
         :param y: Outcome; scalar (continuous/count) or categorical Series/DataFrame.
         :param outcome_type: 'continuous'/'count'/'categorical'; inferred from `y` if omitted.
         :param verbose: Verbosity level (0 = silent).
-        :param kwargs: `bandwidth` (float, scale multiplier for the numeric
-            finite-difference step, `sd(col) * bandwidth / n ** bandwidth_exponent`;
-            default `1.0`), `bandwidth_exponent` (float, sample-size exponent in
-            that denominator; default `0.2`), `exponent` (float, power applied
+        :param kwargs: `bandwidth` (float, the numeric central-difference step on
+            the standardized scale -- columns are perturbed by
+            `+/- sd(col) * bandwidth / n ** bandwidth_exponent` and the difference
+            divided by twice that standardized step, giving a per-SD derivative;
+            default `1.0`), `bandwidth_exponent` (float, optional sample-size
+            exponent on that step; default `0.0` since 2026-10-20, previously
+            `0.2` with a one-sided raw-unit difference), `exponent` (float, power applied
             to each pointwise importance before averaging; default `1.0`), and
             `model_kwargs` (dict, forwarded to the `XGBRegressor`/`XGBClassifier`
             constructor -- e.g. `max_depth`, `learning_rate`, `min_child_weight`,
@@ -1058,6 +1068,46 @@ def _collapse_cat_importance(
         )
     return max(np.max(coef[idxlist]), 0) - min(np.min(coef[idxlist]), 0)
 #/def _collapse_cat_importance
+
+
+def _pooled_ohe_level_freqs(
+    X_ohe: np.ndarray,
+    oheDict: dict[ str, int | tuple[ int, ... ] ],
+    col: str,
+    ) -> np.ndarray:
+    """Level frequencies [reference, dummy_1, ...] of categorical column `col` in a
+    raw 0/1, drop_first-encoded [X, Xk] design, pooled over `col` and its knockoff
+    partner (`col` <-> `col~`) so original and knockoff use the same weights.
+    Falls back to `col`'s own frequencies if the partner encodes a different
+    number of levels."""
+    own = X_ohe[ :, list( oheDict[ col ] ) ].mean( axis=0 )
+    partner = col[ :-1 ] if col.endswith( '~' ) else col + '~'
+    if partner in oheDict and not isinstance( oheDict[ partner ], int ) and len( oheDict[ partner ] ) == len( oheDict[ col ] ):
+        own = ( own + X_ohe[ :, list( oheDict[ partner ] ) ].mean( axis=0 ) ) / 2.0
+    #
+    return np.concatenate( ( [ 1.0 - own.sum() ], own ) )
+#/def _pooled_ohe_level_freqs
+
+
+def _collapse_cat_weighted_sd(
+    level_coefs: np.ndarray,
+    pi: np.ndarray,
+    inv_cov: np.ndarray | None = None,
+    ) -> float:
+    """Frequency-weighted SD of a categorical predictor's level effects.
+
+    `level_coefs` is (K,) for a scalar linear predictor, or (k_y - 1, K) of
+    reference-class contrasts for a multinomial one (Omega-norm via `inv_cov`),
+    with the reference level's zero effect in column 0. Shift-invariant, so it
+    does not depend on the reference level; equals the SD of the predictor's
+    fitted contribution, on the same scale as |beta| for a unit-SD continuous
+    predictor (and |beta| sqrt(pi(1 - pi)) for a binary one)."""
+    dev = level_coefs - level_coefs @ pi if level_coefs.ndim == 1 else level_coefs - ( level_coefs @ pi )[ :, None ]
+    if level_coefs.ndim == 1:
+        return float( np.sqrt( max( ( dev ** 2 ) @ pi, 0.0 ) ) )
+    #
+    return float( np.sqrt( max( np.einsum( 'ak,ab,bk->k', dev, inv_cov, dev ) @ pi, 0.0 ) ) )
+#/def _collapse_cat_weighted_sd
 
 
 def lassoImportances(
@@ -1167,6 +1217,7 @@ def lassoImportances(
         )
     #
 
+    multiclass_contrast: tuple[ np.ndarray, np.ndarray ] | None = None
     if outcomeDescriptor.outcome_type == 'continuous':
         from sklearn.linear_model import LassoCV
         lassoModel: LassoCV = LassoCV(
@@ -1293,6 +1344,7 @@ def lassoImportances(
                 lasso_coefficients = np.sqrt(
                     np.einsum( 'kp,kl,lp->p', coef_contrast, inv_cov, coef_contrast )
                 )
+                multiclass_contrast = ( coef_contrast, inv_cov )
         #/switch lasso_coefficients.shape
     #
     else:
@@ -1304,11 +1356,44 @@ def lassoImportances(
     #
     
     # Collapse the ohe categories
+    # 2026-10-22: categorical predictors use the frequency-weighted SD of their
+    # level effects (reference effect 0, level frequencies pooled over X/Xk)
+    # instead of the coefficient range max(b, 0) - min(b, 0) -- the same score
+    # as PRISM's categorical predictors (heteroknockofftorch
+    # _localGrad_forCategories_t), on the |beta| scale of the unit-SD continuous
+    # predictors. Multinomial: Omega-weighted SD of the contrast vectors.
+    if False:
+        importances = np.fromiter(
+            (
+                np.abs( lasso_coefficients[ oheDict[col] ] )
+                if isinstance( oheDict[col], int )
+                else _collapse_cat_importance( lasso_coefficients, oheDict[col], col )
+                for col in X_all_df.columns
+            ),
+            dtype = float,
+        )**exponent
+    #
+    def _cat_score( col: str ) -> float:
+        idx = list( oheDict[ col ] )
+        if not idx:
+            raise ValueError(
+                f"oheDict[{col!r}] is empty — categorical column has only 1 unique value "
+                "in the OHE design matrix. Ensure X and Xk have at least 2 distinct values per categorical column."
+            )
+        #
+        pi = _pooled_ohe_level_freqs( X_ohe, oheDict, col )
+        if multiclass_contrast is not None:
+            coef_contrast, inv_cov = multiclass_contrast
+            levels = np.concatenate( ( np.zeros( ( coef_contrast.shape[ 0 ], 1 ) ), coef_contrast[ :, idx ] ), axis=1 )
+            return _collapse_cat_weighted_sd( levels, pi, inv_cov )
+        #
+        return _collapse_cat_weighted_sd( np.concatenate( ( [ 0.0 ], lasso_coefficients[ idx ] ) ), pi )
+    #/def _cat_score
     importances = np.fromiter(
         (
             np.abs( lasso_coefficients[ oheDict[col] ] )
             if isinstance( oheDict[col], int )
-            else _collapse_cat_importance( lasso_coefficients, oheDict[col], col )
+            else _cat_score( col )
             for col in X_all_df.columns
         ),
         dtype = float,

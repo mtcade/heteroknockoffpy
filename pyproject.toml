@@ -1,6 +1,6 @@
 [project]
 name = "heteroknockoffpy"
-version = "0.3.2"
+version = "0.4.0"
 description = "Variable selection with knockoffs for heterogeneous continuous, count, and categorical data"
 readme = "README.md"
 authors = [

@@ -207,13 +207,31 @@ def _unzero_normalize(mat: np.ndarray) -> np.ndarray:
 #/def _unzero_normalize
 
 
+def _ridge_inv_cov( cov: np.ndarray ) -> np.ndarray:
+    """Inverse of a (k, k) contrast covariance with a trace-relative ridge,
+    cov + max(1e-6 * tr(cov) / k, 1e-12) * I -- the same rule as
+    heteroknockofftorch.prismImportances._ridge_inv_cov_t."""
+    k = cov.shape[ 0 ]
+    eps = max( 1e-6 * float( np.trace( cov ) ) / k, 1e-12 )
+    return np.linalg.inv( cov + eps * np.eye( k ) )
+#/def _ridge_inv_cov
+
+
+def _mahalanobis_norm( d: np.ndarray, VI: np.ndarray ) -> np.ndarray:
+    """Row-wise sqrt(d_i' VI d_i) of an (n, k) array, clamped at 0 before the root."""
+    return np.sqrt( np.maximum( np.einsum( 'ij,jk,ik->i', d, VI, d ), 0.0 ) )
+#/def _mahalanobis_norm
+
+
 def prism_importances(
     X: DataFrameLike,
     Xk: DataFrameLike,
     y: SeriesOrDataFrameLike,
     outcome_type: Literal['continuous','count','categorical',] | None = None,
     bandwidth: float = 1.0,
-    bandwidth_exponent: float = 0.2,
+    # 2026-10-20: default 0.2 -> 0.0 -- the step is now `bandwidth` on the
+    # standardized scale, used as given, matching the torch PRISM convention.
+    bandwidth_exponent: float = 0.0,
     exponent: float = 1.0,
     verbose: int = 0,
     model_kwargs: dict | None = None,
@@ -225,13 +243,22 @@ def prism_importances(
         PRISM local-gradient importance using a single xgboost model on [X, Xk],
         mirroring stat.forest.prism_{continuous,count,categorical}.R:
 
-        Numeric columns   — bandwidth finite-difference of the prediction.
-        Categorical columns — max-minus-min sweep across category levels.
+        Numeric columns   — central finite difference on the standardized scale:
+            (g(x + h*sd) - g(x - h*sd)) / (2h), h = bandwidth / n**bandwidth_exponent
+            (h = bandwidth by default), i.e. a per-SD derivative -- the same
+            convention as the torch PRISM networks, which standardize X and use
+            +/- bandwidth directly.
+        Categorical columns — sweep across category levels: the frequency-weighted
+            SD of the level predictions, sqrt( sum_k pi_k ( g_k - gbar )^2 ), for a
+            scalar response, and its Omega-norm analog
+            sqrt( sum_k pi_k ||g_k - gbar||_Omega^2 ) for a categorical response;
+            pi_k pools the level frequencies of the predictor and its knockoff.
 
         continuous: raw prediction. count: log(unzero(prediction)).
         categorical: log-odds contrasts (vs. first class) of predict_proba,
-        reduced via the Mahalanobis norm using the inverse covariance of the
-        base contrasts.
+        reduced via the Mahalanobis norm sqrt(d' Omega d), Omega the
+        trace-ridge-regularized inverse covariance of the base contrasts
+        (same rule as the torch networks' `_ridge_inv_cov_t`).
 
         :param model_kwargs: Forwarded to the XGBRegressor/XGBClassifier constructor
             (e.g. max_depth, n_estimators, learning_rate, subsample, reg_alpha, ...).
@@ -247,7 +274,12 @@ def prism_importances(
 
     n: int = X_all_pd.shape[0]
     p_all: int = X_all_pd.shape[1]
-    n_factor: float = n ** bandwidth_exponent
+    # 2026-10-20: forward difference with raw step sd*bandwidth/n**bandwidth_exponent
+    # replaced by a central difference with standardized step h (see docstring).
+    if False:
+        n_factor: float = n ** bandwidth_exponent
+    #
+    h_std: float = bandwidth / ( n ** bandwidth_exponent )
 
     VI: np.ndarray | None = None
     base_contrasts: np.ndarray | None = None
@@ -266,7 +298,12 @@ def prism_importances(
         base_contrasts = base_log[ :, 1: ] - base_log[ :, 0:1 ]
         # np.cov collapses to a 0-d scalar for a single-column input (binary
         # outcome, k_y=2); atleast_2d restores the 1x1 matrix shape inv() needs.
-        VI = np.linalg.inv( np.atleast_2d( np.cov( base_contrasts, rowvar=False ) ) )
+        # 2026-10-20: same trace-relative ridge as the torch networks, instead of
+        # an unregularized inverse.
+        if False:
+            VI = np.linalg.inv( np.atleast_2d( np.cov( base_contrasts, rowvar=False ) ) )
+        #
+        VI = _ridge_inv_cov( np.atleast_2d( np.cov( base_contrasts, rowvar=False ) ) )
     #
     elif ot == 'count':
         base_preds = np.log( _unzero( model.predict( X_all_pd ) ) )
@@ -289,6 +326,12 @@ def prism_importances(
             if len( levels ) == 0:
                 continue
             #
+            # 2026-10-22: level frequencies pooled over the predictor and its
+            # knockoff (col <-> col~), so T_j and T~_j use the same weights.
+            partner = col[ :-1 ] if col.endswith( '~' ) else col + '~'
+            pooled_vals = pd.concat( ( X_all_pd[ col ].astype( object ), X_all_pd[ partner ].astype( object ) ) )
+            pi = pooled_vals.value_counts( normalize=True ).reindex( list( levels ), fill_value=0.0 ).to_numpy( dtype=float )
+            pi = pi / pi.sum()
 
             if ot == 'categorical':
                 logodds_per_level: np.ndarray = np.zeros( ( n, VI.shape[0], len( levels ) ) )
@@ -298,8 +341,31 @@ def prism_importances(
                     log_p = np.log( _unzero_normalize( model.predict_proba( X_test ) ) )
                     logodds_per_level[ :, :, ki ] = log_p[ :, 1: ] - log_p[ :, 0:1 ]
                 #
-                contrasts = logodds_per_level.max( axis=2 ) - logodds_per_level.min( axis=2 )
-                importances_pointwise[ :, j ] = np.sqrt( np.einsum( 'ij,jk,ik->i', contrasts, VI, contrasts ) )
+                # 2026-10-20: per-coordinate range replaced by the Omega-diameter
+                # over pairs of levels (invariant to the reference class and to
+                # level labels; reduces to range/sd for a binary response).
+                if False:
+                    contrasts = logodds_per_level.max( axis=2 ) - logodds_per_level.min( axis=2 )
+                    importances_pointwise[ :, j ] = np.sqrt( np.einsum( 'ij,jk,ik->i', contrasts, VI, contrasts ) )
+                #
+                # 2026-10-22: Omega-diameter replaced by the frequency-weighted
+                # Omega-SD sqrt( sum_k pi_k ||g_k - gbar||_Omega^2 ), matching the
+                # torch networks' _localGrad_forCategories_t.
+                if False:
+                    diameter = np.zeros( n )
+                    for ka in range( len( levels ) ):
+                        for kb in range( ka + 1, len( levels ) ):
+                            diameter = np.maximum(
+                                diameter,
+                                _mahalanobis_norm( logodds_per_level[ :, :, ka ] - logodds_per_level[ :, :, kb ], VI ),
+                            )
+                        #
+                    #
+                    importances_pointwise[ :, j ] = diameter
+                #
+                dev = logodds_per_level - ( logodds_per_level * pi ).sum( axis=2, keepdims=True )
+                sq = np.einsum( 'nak,ab,nbk->nk', dev, VI, dev )
+                importances_pointwise[ :, j ] = np.sqrt( np.clip( ( sq * pi ).sum( axis=1 ), 0.0, None ) )
             #
             else:
                 preds_mat: np.ndarray = np.zeros( ( n, len( levels ) ) )
@@ -309,32 +375,71 @@ def prism_importances(
                     preds = model.predict( X_test )
                     preds_mat[ :, ki ] = np.log( _unzero( preds ) ) if ot == 'count' else preds
                 #
-                importances_pointwise[ :, j ] = preds_mat.max( axis=1 ) - preds_mat.min( axis=1 )
+                # 2026-10-22: prediction range replaced by the frequency-weighted
+                # SD of the level predictions (same scale as the per-SD
+                # continuous score; see _localGrad_forCategories_t).
+                if False:
+                    importances_pointwise[ :, j ] = preds_mat.max( axis=1 ) - preds_mat.min( axis=1 )
+                #
+                dev = preds_mat - ( preds_mat @ pi )[ :, None ]
+                importances_pointwise[ :, j ] = np.sqrt( np.clip( ( dev ** 2 ) @ pi, 0.0, None ) )
             #/if ot == 'categorical'/else
         #
         else:
-            col_std = X_all_pd[ col ].std()
-            bw = float( col_std ) * bandwidth / n_factor
-            if bw == 0:
+            # 2026-10-20: forward difference in raw units replaced by a central
+            # difference on the standardized scale (per-SD derivative), matching
+            # the torch PRISM networks.
+            if False:
+                col_std = X_all_pd[ col ].std()
+                bw = float( col_std ) * bandwidth / n_factor
+                if bw == 0:
+                    continue
+                #
+
+                X_test = X_all_pd.copy()
+                X_test[ col ] = X_all_pd[ col ] + bw
+
+                if ot == 'categorical':
+                    log_p = np.log( _unzero_normalize( model.predict_proba( X_test ) ) )
+                    grad_mat = ( log_p - base_log ) / bw
+                    contrasts = grad_mat[ :, 1: ] - grad_mat[ :, 0:1 ]
+                    importances_pointwise[ :, j ] = np.sqrt( np.einsum( 'ij,jk,ik->i', contrasts, VI, contrasts ) )
+                #
+                elif ot == 'count':
+                    mod_log = np.log( _unzero( model.predict( X_test ) ) )
+                    importances_pointwise[ :, j ] = ( mod_log - base_preds ) / bw
+                #
+                else:
+                    mod_preds = model.predict( X_test )
+                    importances_pointwise[ :, j ] = ( mod_preds - base_preds ) / bw
+            #
+            col_std = float( X_all_pd[ col ].std() )
+            if col_std == 0 or h_std == 0:
                 continue
             #
+            step = col_std * h_std
 
-            X_test = X_all_pd.copy()
-            X_test[ col ] = X_all_pd[ col ] + bw
+            X_plus = X_all_pd.copy()
+            X_plus[ col ] = X_all_pd[ col ] + step
+            X_minus = X_all_pd.copy()
+            X_minus[ col ] = X_all_pd[ col ] - step
 
             if ot == 'categorical':
-                log_p = np.log( _unzero_normalize( model.predict_proba( X_test ) ) )
-                grad_mat = ( log_p - base_log ) / bw
+                log_p_plus  = np.log( _unzero_normalize( model.predict_proba( X_plus ) ) )
+                log_p_minus = np.log( _unzero_normalize( model.predict_proba( X_minus ) ) )
+                grad_mat = ( log_p_plus - log_p_minus ) / ( 2.0 * h_std )
                 contrasts = grad_mat[ :, 1: ] - grad_mat[ :, 0:1 ]
-                importances_pointwise[ :, j ] = np.sqrt( np.einsum( 'ij,jk,ik->i', contrasts, VI, contrasts ) )
+                importances_pointwise[ :, j ] = _mahalanobis_norm( contrasts, VI )
             #
             elif ot == 'count':
-                mod_log = np.log( _unzero( model.predict( X_test ) ) )
-                importances_pointwise[ :, j ] = ( mod_log - base_preds ) / bw
+                importances_pointwise[ :, j ] = (
+                    np.log( _unzero( model.predict( X_plus ) ) ) - np.log( _unzero( model.predict( X_minus ) ) )
+                ) / ( 2.0 * h_std )
             #
             else:
-                mod_preds = model.predict( X_test )
-                importances_pointwise[ :, j ] = ( mod_preds - base_preds ) / bw
+                importances_pointwise[ :, j ] = (
+                    model.predict( X_plus ) - model.predict( X_minus )
+                ) / ( 2.0 * h_std )
             #/if ot == 'categorical'/elif 'count'/else
         #/if is_categorical/else
     #/for j, col

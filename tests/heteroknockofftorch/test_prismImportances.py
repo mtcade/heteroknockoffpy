@@ -1259,9 +1259,10 @@ def test_range_importance_helper_sign_regimes():
 
 
 def test_get_group_importances_categorical_collapse_method():
-    """get_group_importances's categorical_collapse_method switch: 'l2_norm'
-    (default) returns the Frobenius/L2 norm of the whole group's weight
-    block; 'range' returns the zero-anchored max-min range over its columns'
+    """get_group_importances's categorical_collapse_method switch: 'rms_norm'
+    (default since 2026-10-20) returns the Frobenius norm divided by
+    sqrt(group size); 'l2_norm' returns the Frobenius/L2 norm of the whole
+    group's weight block; 'range' returns the zero-anchored max-min range over its columns'
     L2 norms instead. A numeric singleton returns its own column norm
     unchanged under either method."""
     import torch
@@ -1281,7 +1282,15 @@ def test_get_group_importances_categorical_collapse_method():
 
     imp_default = model.get_group_importances(groups)
     assert imp_default[0] == pytest.approx(2.0)
-    assert imp_default[1] == pytest.approx(frobenius_norm)
+    # 2026-10-20: default is now 'rms_norm' (Frobenius / sqrt(3) here), not 'l2_norm'.
+    if False:
+        assert imp_default[1] == pytest.approx(frobenius_norm)
+    #
+    assert imp_default[1] == pytest.approx(frobenius_norm / 3 ** 0.5)
+
+    imp_rms = model.get_group_importances(groups, categorical_collapse_method='rms_norm')
+    assert imp_rms[0] == pytest.approx(2.0)
+    assert imp_rms[1] == pytest.approx(frobenius_norm / 3 ** 0.5)
 
     imp_l2 = model.get_group_importances(groups, categorical_collapse_method='l2_norm')
     assert imp_l2[0] == pytest.approx(2.0)
