@@ -1,6 +1,6 @@
 [project]
 name = "heteroknockoffpy"
-version = "0.4.0"
+version = "0.5.0"
 description = "Variable selection with knockoffs for heterogeneous continuous, count, and categorical data"
 readme = "README.md"
 authors = [
@@ -26,6 +26,10 @@ license-files = ["LICENSE"]
 
 [project.optional-dependencies]
 shap = ["shap"]
+example-data = ["pooch>=1.8", "tqdm"]
+
+[project.scripts]
+heteroknockoffpy-fetch-data = "heteroknockoffpy.datasets.fetch:main"
 
 [build-system]
 requires = ["uv_build>=0.11.23,<0.12"]

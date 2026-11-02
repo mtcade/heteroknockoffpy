@@ -287,3 +287,50 @@ W = wFromImportances(imp)
 threshold = selection_threshold(W, fdr=0.1)
 selected = [j for j, w in enumerate(W) if w >= threshold]
 ```
+
+---
+
+## Example data
+
+The PRISM simulation results (Zenodo DOI [10.5281/zenodo.22085306](https://doi.org/10.5281/zenodo.22085306), ~580 MB) are
+available as optional example data. Nothing is downloaded at install time. Install the downloader extra, then fetch it
+explicitly or let the first load do it:
+
+```
+pip install 'heteroknockoffpy[example-data]'
+heteroknockoffpy-fetch-data          # or: python -m heteroknockoffpy.datasets  (--path, --force, --keep-zip, --data-home)
+```
+
+The download is SHA-256 verified and cached in the user cache directory (`~/Library/Caches/heteroknockoffpy` on macOS,
+`~/.cache/heteroknockoffpy` on Linux). Override it with `data_home=` or `$HETEROKNOCKOFFPY_DATA`, or point `root=` at
+an already-extracted `data/` directory (e.g. a PRISMdata checkout).
+
+```python
+import numpy as np
+import polars as pl
+from heteroknockoffpy import datasets
+
+count = datasets.load_prism("count")     # "linear" | "continuous" | "count" | "categorical"; downloads if needed
+count.catalog                            # one row per trial: scenario, n, p, covariance, magnitude, importance_methods,
+                                         # relevant_features, fdr, ... -- ready for polars group_by/plots
+view = count.filter(importance_method="torch_prism", scenario="n_sweep", n=[1024, 4096])
+view = view.filter(pl.col("covariance_rho") > 0.5)
+
+trial = view[0]                          # by position, or view["<bundle_id>"]; iterate with `for trial in view:`
+trial.X, trial.Xk, trial.y               # design matrix, stored knockoffs, response
+trial.importances, trial.selections      # stored results (long polars frames)
+trial.relevant_features                  # ground truth from the generating function
+trial.selected_features("torch_prism")   # stored selections
+trial.selected_features("torch_prism", fdr=0.1)    # re-threshold stored importances, no refit
+trial.fdp("torch_prism"), trial.power("torch_prism")
+
+# Recompute with the stored settings (fresh randomness)
+rng = np.random.default_rng(0)
+Xk = trial.compute_knockoffs(rng)
+imp = trial.compute_importances("torch_prism", rng=rng, Xk=Xk)
+```
+
+A trial can store more than one importance method (`torch_grip2` and `torch_prism` are read off one shared fit), so
+methods that take `method` require it whenever `trial.methods` has more than one entry. Lower-level access is in
+`heteroknockoffpy.datasets.prism.raw` (tables in their on-disk shape) and `heteroknockoffpy.datasets.prism.transforms`
+(`heteroknockoffpy_kwargs`, `relevant_features`, importance-array helpers).
