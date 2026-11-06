@@ -12,7 +12,18 @@ Based on the knockoff filter framework ([Candès et al., 2018](https://academic.
 pip install heteroknockoffpy
 ```
 
-`categorical_method='ranger'`, `categorical_method='ranger_scip'`, and `method='ranger_SCIP'` require R and `rpy2`. Install the `ranger` R package before using them. `categorical_method='xgb'`, `categorical_method='xgb_scip'`, and `method='xgb_SCIP'` use `xgboost` instead and don't require R.
+Some features need a working R installation (`rpy2` is installed as a dependency, but R itself is not):
+
+| needs R | doesn't need R |
+|---|---|
+| `method='second_order'` (R `knockoff`), `method='ranger_SCIP'`, `categorical_method='ranger'`/`'ranger_scip'`, `rangerGiniImportances`, `rangerPrismImportances` (R `ranger`) | `method='torch_GAN'`/`'xgb_SCIP'`/`'glm_SCIP'`, `categorical_method='xgb'`/`'xgb_scip'`/`'linear'`/`'ohe'`, every other importance function |
+
+The R packages `knockoff`, `ranger`, and `arrow` are installed from CRAN automatically the first time an R-backed feature is
+used, if they're missing. `xgbShapImportances` needs the optional `shap` extra:
+
+```
+pip install 'heteroknockoffpy[shap]'
+```
 
 On macOS, `xgboost` requires OpenMP:
 
@@ -20,33 +31,23 @@ On macOS, `xgboost` requires OpenMP:
 brew install libomp
 ```
 
-### macOS: torch + xgboost run in separate processes automatically
+### macOS: torch, xgboost, and R run in separate processes automatically
 
-`torch` and `xgboost` each load their own copy of `libomp`, and having both in one process
-crashes on macOS. The public API handles this transparently: any `heteroknockoffpy.importance`
-`xgb*`/`prism*` call, and `knockoff.get_knockoffs(method="torch_GAN")` / `method="xgb_SCIP"` /
-`categorical_method="xgb_scip"`, automatically runs in an isolated subprocess whenever it would
-introduce the second library into a process that already has the other loaded — so mixing them
-in the same script or notebook just works, with no extra setup. Because this can spawn a
-subprocess, guard top-level driver code with `if __name__ == "__main__":`, per normal Python
-`multiprocessing` requirements.
+`torch` and `xgboost` each bundle their own `libomp`, and R (via `rpy2`) embeds its own native runtime; loading any two of
+them into one process can crash on macOS. The public API handles this for you. Every `knockoff` and `importance` call that
+uses torch, xgboost, or R runs in a freshly spawned subprocess whenever one of the *other* two is already loaded in the
+current process, so you can mix them in the same script or notebook with no extra setup. Because this can spawn a
+subprocess, guard top-level driver code with `if __name__ == "__main__":`, as Python `multiprocessing` normally requires.
 
-(If you bypass the public API and import `heteroknockoffpy.heteroknockofftorch.torchImportances`
-and `heteroknockoffpy.xgbImportances` directly yourself, this isolation doesn't apply —
-`./scripts/fix_xgboost_omp.sh` is available as a fallback for that case.)
+If you bypass the public API and import `heteroknockoffpy.rbridge`, `heteroknockoffpy.xgbScip`,
+`heteroknockoffpy.xgbImportances`, or `heteroknockoffpy.heteroknockofftorch.*` directly, this isolation doesn't apply.
 
 ---
 
 ## Knockoffs
 
-Every knockoff function shares this common core of inputs:
-
-- **`X`** — Original data (numeric + `pl.Categorical` columns).
-- **`rng`** — `np.random.Generator` seeding the method's randomness (R/xgboost/OHE-sampling downstream, and, for `second_order`, R's own RNG).
-- **`categorical_method`** (`get_second_order`/`get_torchGAN` only) — How categorical columns are encoded before knockoffs are generated: `'ranger'`/`'linear'`/`'ohe'`/`'xgb'`/`'ranger_scip'`/`'xgb_scip'`. See the `categorical_method` table below. Not a parameter of `get_rangerSCIP`/`get_xgbSCIP`, which handle categoricals natively.
-- **`conditional_expectations`** — `pl.DataFrame` of `E[X_j | X_{-j}]` per numeric column; only relevant when `categorical_method` is `'ranger_scip'`/`'xgb_scip'`. Computed internally if omitted. See `conditional_expectations` below.
-- **`verbose`** / **`verbose_prefix`** — Verbosity level (`0` = silent) and a string prefix for any verbose print output, useful when nesting calls inside a higher-level loop.
-- **`weight`** — Optional length-`n` sample weight. `None` (default) fits unweighted. Forwarded to whichever step actually fits something: `'second_order'` uses it as a real weighted mean/covariance; `'ranger'`/`'xgb'`/`'linear'`/`'ranger_scip'`/`'xgb_scip'` (as a `categorical_method` or as `method` itself) use it as native `case.weights`/`sample_weight`; `'ohe'` ignores it (no fit on that path); `'torch_GAN'` accepts it only for signature consistency — the GAN itself is unsupervised and does not use it, though it's still passed through to `categorical_method`'s own fit.
+`knockoff.get_knockoffs(X, method, rng, ...)` picks a generator by name and forwards everything else to it. You can also call
+each generator directly (`get_second_order`, `get_torchGAN`, `get_rangerSCIP`, `get_xgbSCIP`, `get_glmSCIP`).
 
 ```python
 from heteroknockoffpy import knockoff
@@ -57,57 +58,135 @@ rng = np.random.default_rng(0)
 # X is a polars DataFrame; categorical columns must have dtype pl.Categorical
 Xk = knockoff.get_knockoffs(
     X,
-    method="second_order",   # "second_order" | "torch_GAN" | "ranger_SCIP" | "xgb_SCIP"
+    method="second_order",        # required -- see `method` below
     rng=rng,
-    categorical_method="ranger",
+    categorical_method="ranger",  # required for second_order/torch_GAN -- see `categorical_method` below
 )
 ```
 
+Every generator takes these inputs:
+
+- **`X`**: original data (numeric + `pl.Categorical` columns).
+- **`rng`**: `np.random.Generator` that seeds all of the method's randomness (Python, xgboost, torch, and R's own RNG via `set.seed`).
+- **`verbose`** / **`verbose_prefix`**: verbosity level (`0` = silent) and a string prefix for verbose output, useful when nesting calls inside a higher-level loop.
+- **`weight`**: optional length-`n` sample weight. `None` (default) fits unweighted. It goes to whichever step actually fits a model:
+  - `'second_order'` computes a weighted mean and covariance. `shrink` is not honored on the weighted path; a small diagonal ridge is added instead if the weighted covariance isn't positive-definite.
+  - `'ranger'`/`'xgb'`/`'linear'`/`'ranger_scip'`/`'xgb_scip'` (as a `categorical_method`) and `'ranger_SCIP'`/`'xgb_SCIP'`/`'glm_SCIP'` (as a `method`) pass it as native `case.weights`/`sample_weight`.
+  - `'ohe'` ignores it, because nothing is fit on that path.
+  - `'torch_GAN'` accepts it only for signature consistency. The GAN is unsupervised and doesn't use it, but it is still passed to `categorical_method`'s own fit.
+
+Which other options apply depends on `method`:
+
+| `method` | `categorical_method` | `conditional_expectations` | `residuals_method` | categorical columns |
+|---|---|---|---|---|
+| `'second_order'` | **required** | used only with `'ranger_scip'`/`'xgb_scip'` | not accepted (R raises `unused argument`) | via `categorical_method` |
+| `'torch_GAN'` | **required** | used only with `'ranger_scip'`/`'xgb_scip'` | ignored | via `categorical_method` |
+| `'ranger_SCIP'` | not used (ignored, with a warning) | ignored | `'normal'` (default) / `'permute'` | native |
+| `'xgb_SCIP'` | not used (ignored, with a warning) | ignored | `'normal'` (default) / `'permute'` / `'zero_inflated'` | native |
+| `'glm_SCIP'` | not accepted (`TypeError`) | ignored | not accepted (always zero-inflated) | **not supported** (`ValueError`) |
+
 ### `method`
 
-| value | behavior |
-|---|---|
-| `'second_order'` | Matches the first two moments (mean and covariance) of X. Fast and closed-form via the R `knockoff` package. Works well when the joint distribution is approximately Gaussian; may lose power in strongly non-linear settings. |
-| `'torch_GAN'` | Trains a GAN in PyTorch to learn the full joint distribution of X and generate knockoffs that are indistinguishable from it. Slower than second-order but can capture non-Gaussian and non-linear dependence structures. |
-| `'ranger_SCIP'` | Sequential Conditional Independence Procedure knockoffs via the `rangerKnockoff`/`ranger` R packages. Fits a ranger random forest per column (conditioning on all original columns plus all previously generated knockoffs) to estimate conditional distributions, then generates knockoffs from those conditional models. The most statistically principled method for non-parametric joint distributions. |
-| `'xgb_SCIP'` | Same SCIP algorithm as `'ranger_SCIP'`, but each column's conditional model is a sequential [`xgboost.XGBRegressor`/`XGBClassifier`](https://xgboost.readthedocs.io/en/latest/python/python_api.html) instead of an R ranger forest — no R/`rpy2` dependency. See `heteroknockoffpy.xgbScip` for the tuned `model_kwargs` typically used (`max_depth`, `learning_rate`, `min_child_weight`, `subsample`, `colsample_bytree`, `reg_alpha`, `reg_lambda`, `gamma`, `n_estimators`). |
-
-### `categorical_method`
-
-Controls how categorical columns are encoded before knockoffs are generated. Not applicable when `method` is `'ranger_SCIP'` or `'xgb_SCIP'` (which handle categoricals natively).
+Required; there is no default. `'second_order'` and `'torch_GAN'` generate knockoffs for a *numeric* array, so they need
+`categorical_method` to say how categorical columns get in and out of that array. The `*_SCIP` methods model every column
+one at a time and handle categoricals themselves.
 
 | value | behavior |
 |---|---|
-| `'ranger'` | Fits a ranger random forest per categorical column; uses predicted class-probability logits as a soft numeric encoding |
-| `'xgb'` | Same as `'ranger'`, but the per-column probability model is an [`xgboost.XGBClassifier`](https://xgboost.readthedocs.io/en/latest/python/python_api.html) instead of an R ranger forest — no R/`rpy2` dependency. Recognized xgboost hyperparameters (`max_depth`, `learning_rate`, `min_child_weight`, `subsample`, `colsample_bytree`, `reg_alpha`, `reg_lambda`, `gamma`, `n_estimators` — same names as `xgbImportances`'s `model_kwargs`) are picked out of any extra keyword arguments passed to `get_knockoffs`/`get_second_order`/`get_torchGAN` |
-| `'linear'` | Same, but with logistic regression — lighter and faster |
-| `'ohe'` | Hard one-hot-encodes categories as floats; no probability smoothing |
-| `'ranger_scip'` | For numeric columns, operates on conditional residuals `X_j − E[X_j | X_{-j}]` so knockoffs respect the joint distribution; for categorical columns uses ranger forest-SCIP |
-| `'xgb_scip'` | Same as `'ranger_scip'`, but conditional expectations and categorical SCIP knockoffs are computed with sequential [`xgboost`](https://xgboost.readthedocs.io/en/latest/python/python_api.html) models instead of R ranger — no R/`rpy2` dependency |
+| `'second_order'` | Matches the first two moments (mean and covariance) of the numeric array, using R `knockoff::create.second_order`. Fast and closed-form. Works well when the joint distribution is roughly Gaussian; may lose power in strongly non-linear settings. Extra kwargs: `shrink` (default `True`, shrinks the covariance estimate; worth setting explicitly when `p` is large relative to `n`) and `method` (R's `create.second_order` method, default `'asdp'`). Requires R. |
+| `'torch_GAN'` | Trains a GAN in PyTorch to learn the full joint distribution of the numeric array and generate knockoffs from it. Slower than `'second_order'`, but it can capture non-Gaussian and non-linear dependence. Extra kwargs: `niter` (default `2000`), `mb_size` (`128`), `lr` (`1e-4`), `lamda` (`1`), `mu` (`1`), `lam` (`10`), `combined_inner` (`False`); unrecognized kwargs are ignored. |
+| `'ranger_SCIP'` | Sequential Conditional Independence Pairs (SCIP) knockoffs with R `ranger` forests. Each column's knockoff comes from a forest that conditions on all original columns plus every knockoff generated so far: a probability forest for categorical columns, and a regression forest plus a resampled residual (`residuals_method`) for numeric columns. Extra kwargs go to `ranger::ranger` (`num_trees`, `mtry`, `min_node_size`, `max_depth`, `sample_fraction`, `num_threads`, `respect_unordered_factors`). Requires R. |
+| `'xgb_SCIP'` | The same SCIP algorithm as `'ranger_SCIP'`, but each column's model is an [`xgboost.XGBRegressor`/`XGBClassifier`](https://xgboost.readthedocs.io/en/latest/python/python_api.html). No R/`rpy2` dependency. Pass xgboost hyperparameters directly as kwargs (`max_depth`, `learning_rate`, `min_child_weight`, `subsample`, `colsample_bytree`, `reg_alpha`, `reg_lambda`, `gamma`, `n_estimators`). |
+| `'glm_SCIP'` | SCIP for sparse/zero-inflated, **all-numeric** `X` using regularized linear GLMs: a logistic model for `P(x_j ≠ 0)` plus a Gamma GLM (`nonzero_model='gamma'`, default) or a log-normal Ridge model (`nonzero_model='exponential'`, with `clipped=True` by default) for the nonzero part. Extra kwargs: `nonzero_model`, `clipped`, `logistic_kwargs`, `nonzero_kwargs`. Raises `ValueError` if `X` has any categorical column. |
 
-`'ranger_scip'`/`'xgb_scip'` are the most statistically principled approaches for mixed data. `'ranger'`, `'xgb'`, or `'linear'` are convenient defaults when a quick approximation is acceptable.
+### `residuals_method` (`'ranger_SCIP'`/`'xgb_SCIP'` only)
 
-### `conditional_expectations`
+How each numeric column's knockoff residual is drawn around its fitted conditional mean. Categorical columns are unaffected.
 
-A `pl.DataFrame` of shape `(n, p_numeric)` giving `E[X_j | X_{-j}]` for each numeric column. Only relevant when `categorical_method` is `'ranger_scip'` or `'xgb_scip'`.
+| value | behavior |
+|---|---|
+| `'normal'` (default) | Residual drawn from `N(0, sd(residuals))` |
+| `'permute'` | Residual is a random permutation of the observed residuals |
+| `'zero_inflated'` | `'xgb_SCIP'` only (`'ranger_SCIP'` raises `AssertionError`). For sparse numeric columns: a two-part `P(x_j ≠ 0)` classifier plus `E[x_j | x_j ≠ 0]` regressor; the draw is a Bernoulli gate around a normal-perturbed nonzero value |
+
+### `categorical_method` (`'second_order'`/`'torch_GAN'` only)
+
+Required whenever `method` is `'second_order'` or `'torch_GAN'`; leaving it out raises `KeyError`. There is no default. It
+controls how the data is turned into the numeric array that the knockoff generator sees, and how the result is turned back
+into a frame with `X`'s schema. The six values fall into two families, and only the second one uses
+`conditional_expectations`:
+
+**Encoding family:** `conditional_expectations` is ignored. The generator sees the raw numeric columns plus an encoding of each
+categorical column, and its output is decoded back into categories. For all-numeric `X` there is nothing to encode, so the choice
+among these four doesn't matter.
+
+| value | behavior |
+|---|---|
+| `'ranger'` | Fits an R ranger probability forest per categorical column and uses the predicted class-probability logits as a soft numeric encoding. Decoded by softmax sampling. Requires R |
+| `'xgb'` | Same as `'ranger'`, but the per-column probability model is an [`xgboost.XGBClassifier`](https://xgboost.readthedocs.io/en/latest/python/python_api.html). No R/`rpy2` dependency. Recognized xgboost hyperparameters (`max_depth`, `learning_rate`, `min_child_weight`, `subsample`, `colsample_bytree`, `reg_alpha`, `reg_lambda`, `gamma`, `n_estimators`) are picked out of the extra kwargs passed to `get_knockoffs`/`get_second_order`/`get_torchGAN`; everything else goes to the knockoff generator |
+| `'linear'` | Same as `'ranger'`, but with logistic regression. Lighter and faster |
+| `'ohe'` | Hard one-hot encoding as floats, with no probability smoothing. Decoded by taking the largest dummy |
+
+**Conditional-residual family:** uses `conditional_expectations` (see below). The generator sees only the numeric residuals
+`X_j − E[X_j | X_{-j}]`, not the raw columns. Categorical columns never enter the generator; their knockoffs are drawn by
+SCIP afterwards. These two values change the result even for all-numeric `X`.
+
+| value | behavior |
+|---|---|
+| `'ranger_scip'` | Conditional expectations (when not supplied) and the categorical SCIP step use R `ranger` forests. Requires R |
+| `'xgb_scip'` | Same as `'ranger_scip'`, but both steps use sequential [`xgboost`](https://xgboost.readthedocs.io/en/latest/python/python_api.html) models. No R/`rpy2` dependency |
+
+`'ranger_scip'`/`'xgb_scip'` are the most statistically principled choices for mixed data. `'ranger'`, `'xgb'`, or `'linear'`
+are convenient when a quick approximation is acceptable.
+
+### `conditional_expectations` (`'second_order'`/`'torch_GAN'` with `'ranger_scip'`/`'xgb_scip'` only)
+
+A `pl.DataFrame` of shape `(n, p_numeric)` giving `E[X_j | X_{-j}]` for each **numeric** column of `X`, with rows in the same
+order as `X`. A frame you provide must have **exactly the same column names as `X`'s numeric columns**: each column is matched
+to the `X` column with the same name, so column order doesn't matter. A missing column, an extra column (including any
+categorical column), or a renamed column raises `ValueError`.
+
+It only has an effect when `method` is `'second_order'` or `'torch_GAN'` **and** `categorical_method` is `'ranger_scip'` or
+`'xgb_scip'`. In every other combination it is silently ignored: the encoding-family `categorical_method`s discard it, and
+the `*_SCIP` methods never receive it. When it applies, the knockoffs are built from the residuals:
+
+1. Residuals: `R = X_numeric − conditional_expectations`.
+2. Knockoff residuals: `R̃ =` the `method`'s knockoffs of `R`, so `'second_order'` matches the residuals' mean and covariance, and `'torch_GAN'` learns their joint distribution.
+3. Numeric knockoffs: `X̃_numeric = conditional_expectations + R̃`.
+4. Categorical knockoffs: drawn one column at a time by SCIP (ranger or xgboost, per `categorical_method`), conditioning on `X` and `X̃_numeric`.
+
+If `conditional_expectations=None` (the default), the package computes it internally on every call: with R `ranger` for
+`'ranger_scip'` (`rbridge.get_forest_conditional_expectations`), or with sequential `xgboost.XGBRegressor` models for
+`'xgb_scip'` (`xgbScip.get_forest_conditional_expectations`). To avoid refitting on every draw, compute it once and pass it in.
+Either function's output works with either `categorical_method`.
 
 ```python
-from heteroknockoffpy import rbridge
+from heteroknockoffpy import xgbScip
 
 # compute once, reuse across multiple knockoff draws
-ce = rbridge.get_forest_conditional_expectations(X)
+ce = xgbScip.get_forest_conditional_expectations(X)   # or rbridge.get_forest_conditional_expectations(X)
 
 Xk1 = knockoff.get_knockoffs(X, method="torch_GAN", rng=rng,
-                               categorical_method="ranger_scip",
+                               categorical_method="xgb_scip",
                                conditional_expectations=ce)
-Xk2 = knockoff.get_knockoffs(X, method="torch_GAN", rng=rng,
-                               categorical_method="ranger_scip",
+Xk2 = knockoff.get_knockoffs(X, method="second_order", rng=rng,
+                               categorical_method="xgb_scip",
                                conditional_expectations=ce)
 ```
 
-If `conditional_expectations=None` (the default) and `categorical_method='ranger_scip'`, the package computes them internally using R `ranger::ranger`
-(`rbridge.get_forest_conditional_expectations`). For `categorical_method='xgb_scip'`, it uses sequential `xgboost.XGBRegressor` models instead
-(`xgbScip.get_forest_conditional_expectations`). Pass a pre-computed frame to avoid refitting on every call.
+### Combinations that don't work
+
+| combination | result |
+|---|---|
+| `method='second_order'`/`'torch_GAN'` without `categorical_method` | `KeyError` |
+| `method='glm_SCIP'` with any categorical column in `X` | `ValueError` |
+| `method='glm_SCIP'` with `categorical_method` (or any unrecognized kwarg) | `TypeError` |
+| `method='ranger_SCIP'` with `residuals_method='zero_inflated'` | `AssertionError` (`'xgb_SCIP'` only) |
+| `method='second_order'` with `residuals_method` | R error: `unused argument` |
+| `conditional_expectations` whose column names aren't exactly `X`'s numeric column names | `ValueError` (column order doesn't matter) |
+| `conditional_expectations` with any `method`/`categorical_method` other than `'second_order'`/`'torch_GAN'` + `'ranger_scip'`/`'xgb_scip'` | no error; silently ignored |
+| `categorical_method` with `method='ranger_SCIP'`/`'xgb_SCIP'` | no error; ignored (ranger/xgboost print an "unused argument/parameter" warning) |
+| `weight` with `method='second_order'` and `shrink=True` | no error; shrinkage not applied (see `weight` above) |
 
 ---
 
@@ -119,7 +198,8 @@ Every importance function shares this common core of inputs:
 - **`y`** — Outcome; scalar (continuous/count) or categorical Series/DataFrame.
 - **`outcome_type`** — `'continuous'`/`'count'`/`'categorical'`; inferred from `y` if omitted.
 - **`verbose`** — Verbosity level (`0` = silent).
-- **`weight`** — Optional length-`n` sample weight. `None` (default) fits unweighted. For the PRISM-torch family (`grip2Importances`/`torchPrismImportances`/`prismGrip2Importances`/`grip2ImportancesPerOHE`), it's a per-sample multiplier on the training loss. For `rangerGiniImportances`/`rangerPrismImportances`, it's forwarded to `ranger::ranger`'s `case.weights` (resampling-probability weighting, not a loss multiplier). For `lassoImportances`/`ridgeImportances`/`elasticImportances`, it's forwarded as each underlying sklearn/statsmodels model's `sample_weight`. For the xgboost-based functions (`xgbImportances`/`xgbPrismImportances`/`xgbShapImportances`), it's xgboost's own native `sample_weight`.
+- **`rng`** — Optional `np.random.Generator` for reproducibility (seeds torch / xgboost); unseeded if omitted. Not accepted by the ranger or linear-model functions.
+- **`weight`** — Optional length-`n` sample weight. `None` (default) fits unweighted. For the PRISM-torch family (`grip2Importances`/`torchPrismImportances`/`prismGrip2Importances`/`grip2ImportancesPerOHE`/`torchPrismLocalGradients`), it's a per-sample multiplier on the training loss. For `rangerGiniImportances`/`rangerPrismImportances`, it's forwarded to `ranger::ranger`'s `case.weights` (resampling-probability weighting, not a loss multiplier). For `lassoImportances`/`ridgeImportances`/`elasticImportances`, it's forwarded as each underlying sklearn/statsmodels model's `sample_weight`. For the xgboost-based functions (`xgbImportances`/`xgbPrismImportances`/`xgbShapImportances`), it's xgboost's own native `sample_weight`.
 
 All importance functions return a `np.ndarray` of length `2p` — scores for `[x_1, …, x_p, x̃_1, …, x̃_p]`. Use `wFromImportances` to convert these to knockoff W-statistics for variable selection.
 
@@ -152,8 +232,8 @@ imp = torchPrismImportances(
     X=X, Xk=Xk, y=y,
     layers=[64, 32],
     outcome_type="continuous",
-    local_grad_method="auto_diff",  # "auto_diff" | "bandwidth" (default "bandwidth")
-    bandwidth=None,                 # only used when local_grad_method="bandwidth"
+    local_grad_method="bandwidth",  # "auto_diff" | "bandwidth" (default "bandwidth")
+    bandwidth=1.0,                  # default 1.0; only used when local_grad_method="bandwidth"
     model_type="mlp",
     calibrate=True,                 # derive lambda_path from GRIP2 Eq. 5's gradient-ratio calibration
     n_blocks=30,
@@ -161,7 +241,7 @@ imp = torchPrismImportances(
 )
 ```
 
-`calibrate=True` runs GRIP2 Eq. 5's gradient-ratio calibration to pick `lambda_path`'s range instead of requiring `lambda_min`/`lambda_max` up front. After warmup finishes, it measures `‖∇_W R(θ; λ=1, a)‖ / ‖∇_W L_pred(θ)‖` — the ratio between the group-regularization penalty's gradient norm and the (unregularized) prediction loss's gradient norm, both taken w.r.t. the first-layer group weights, on the held-out warmup validation split (or the full data if none was held out) — averaged over a freshly drawn `a_path` (`n_blocks` values from `Uniform(a_min, a_max)`, default `0.3`–`1.0`). Because the penalty scales linearly in `lambda`, that one ratio (measured at `lambda=1`) is enough to solve directly for the `(lambda_min, lambda_max)` bounds that make the ratio span `[calibrate_rmin, calibrate_rmax]` (default `0.01`–`1.0`) — no candidate lambda values are actually trained during calibration itself. `lambda_path` is then drawn as `n_blocks` values from `LogUniform` over that calibrated range.
+`calibrate` defaults to `False`. `calibrate=True` runs GRIP2 Eq. 5's gradient-ratio calibration to pick `lambda_path`'s range instead of requiring `lambda_min`/`lambda_max` up front. After warmup finishes, it measures `‖∇_W R(θ; λ=1, a)‖ / ‖∇_W L_pred(θ)‖` — the ratio between the group-regularization penalty's gradient norm and the (unregularized) prediction loss's gradient norm, both taken w.r.t. the first-layer group weights, on the held-out warmup validation split (or the full data if none was held out) — averaged over a freshly drawn `a_path` (`n_blocks` values from `Uniform(a_min, a_max)`, default `0.3`–`1.0`). Because the penalty scales linearly in `lambda`, that one ratio (measured at `lambda=1`) is enough to solve directly for the `(lambda_min, lambda_max)` bounds that make the ratio span `[calibrate_rmin, calibrate_rmax]` (default `0.01`–`1.0`) — no candidate lambda values are actually trained during calibration itself. `lambda_path` is then drawn as `n_blocks` values from `LogUniform` over that calibrated range.
 
 With `calibrate=False`, the same two paths are drawn the same way but without the calibration step: `lambda_path` from `LogUniform(lambda_min, lambda_max)` (default `1e-3`–`1e-1`) and `a_path` from `Uniform(a_min, a_max)` (default `0.3`–`1.0`), each of length `n_blocks` (default `30`), both seeded by `rng`.
 
@@ -188,6 +268,14 @@ g_imp, w_imp = prismGrip2Importances(
 ```
 
 All parameters are identical to `torchPrismImportances`, including the `calibrate`/`n_blocks` regularization-path defaults described above. `local_grad_method` defaults to `'bandwidth'` and governs only the G (Torch PRISM) snapshot; the W (GRIP2) snapshot uses group norms and needs no gradient method.
+
+### GRIP2 per dummy — `grip2ImportancesPerOHE`
+
+Same training as `grip2Importances`, but every one-hot dummy of a categorical column is its own regularization group and gets its own score, instead of being grouped back into one score per original variable. Only `model_type='mlp'`/`'pairwise'` are supported. Returns shape `(2·p_ohe,)` (first half for `X`'s one-hot-expanded columns, second half for `Xk`'s), so `wFromImportances` gives one W-statistic per dummy, not per variable.
+
+### Torch PRISM local gradients — `torchPrismLocalGradients`
+
+Trains the same network as `torchPrismImportances` but returns the raw per-sample local-gradient matrix for `X` only, shape `(n, p_numeric + Σ(c_k − 1))`, instead of averaged importances. Continuous/count outcomes only (`'categorical'` raises `NotImplementedError`).
 
 ### Lasso — `lassoImportances`
 
@@ -266,9 +354,24 @@ imp = rangerPrismImportances(X=X, Xk=Xk, y=y, outcome_type="continuous")
 W   = wFromImportances(imp)
 ```
 
-Accepts any extra keyword arguments (e.g. `bandwidth`, `exponent`, `num_trees`) which are forwarded to `ranger::ranger` or the PRISM script. Requires R and `rpy2` with the `ranger` package installed.
+Accepts extra keyword arguments: ranger's own (`num_trees`, `mtry`, `min_node_size`, `max_depth`, `sample_fraction`, `num_threads`, `respect_unordered_factors`) go to `ranger::ranger`, and `bandwidth`/`bandwidth_exponent`/`exponent` go to the PRISM script. Requires R and `rpy2` with the `ranger` package installed.
 
-### `model_type` (PRISM only)
+### XGBoost — `xgbImportances`, `xgbPrismImportances`, `xgbShapImportances`
+
+Each fits a single xgboost model on `[X, Xk]` with native categorical handling (no one-hot encoding), so no R is needed. Pass xgboost constructor hyperparameters as `model_kwargs={...}` (`max_depth`, `learning_rate`, `n_estimators`, …).
+
+- `xgbImportances` — split-based importances; `importance_type` is `'gain'` (default), `'weight'`, `'cover'`, `'total_gain'`, or `'total_cover'`.
+- `xgbPrismImportances` — the xgboost analogue of `rangerPrismImportances` (same sensitivity measures as the table above). Extra kwargs: `bandwidth` (default `1.0`), `bandwidth_exponent` (default `0.0`), `exponent` (default `1.0`).
+- `xgbShapImportances` — mean absolute SHAP contributions via `shap.TreeExplainer`; requires `pip install 'heteroknockoffpy[shap]'`.
+
+```python
+from heteroknockoffpy.importance import xgbPrismImportances
+
+imp = xgbPrismImportances(X=X, Xk=Xk, y=y, outcome_type="continuous", rng=rng,
+                          model_kwargs={"max_depth": 4, "n_estimators": 200})
+```
+
+### `model_type` (torch GRIP2/PRISM family)
 
 | value | behavior |
 |---|---|
@@ -283,8 +386,8 @@ Accepts any extra keyword arguments (e.g. `bandwidth`, `exponent`, `num_trees`) 
 ```python
 from heteroknockoffpy.importance import wFromImportances, selection_threshold
 
-W = wFromImportances(imp)
-threshold = selection_threshold(W, fdr=0.1)
+W = wFromImportances(imp)                    # W_method="difference" (default) | "signed_max"
+threshold = selection_threshold(W, fdr=0.1)  # offset=1 (default) controls FDR exactly; offset=0 controls modified FDR
 selected = [j for j, w in enumerate(W) if w >= threshold]
 ```
 

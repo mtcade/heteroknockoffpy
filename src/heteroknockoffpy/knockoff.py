@@ -129,12 +129,29 @@ def get_withCallable(
             )
         #
 
+        # Match conditional_expectations to X's numeric columns BY NAME, in X's
+        # order: get_knockoffs_with_Xk_numeric assigns Xk_numeric's columns
+        # positionally in X's numeric-column order, so a user-supplied frame
+        # with the same names in a different order would otherwise silently
+        # put each knockoff in the wrong column.
+        numeric_columns: list[ str ] = [
+            col for col, dtype in X.schema.items() if dtype != pl.Categorical
+        ]
+        if set( conditional_expectations.columns ) != set( numeric_columns ):
+            raise ValueError(
+                "conditional_expectations columns must be exactly X's numeric columns "
+                "(matched by name); missing={}, unexpected={}".format(
+                    sorted( set( numeric_columns ) - set( conditional_expectations.columns ) ),
+                    sorted( set( conditional_expectations.columns ) - set( numeric_columns ) ),
+                )
+            )
+        #
+        conditional_expectations = conditional_expectations.select( numeric_columns )
+
         ce_np: np.ndarray = conditional_expectations.to_numpy()
 
         Xk_residuals: np.ndarray = knockoffCallable(
-            X.select(
-                conditional_expectations.columns
-            ).to_numpy() - ce_np
+            X.select( numeric_columns ).to_numpy() - ce_np
         )
 
         return _processIsolation.run_isolated_if_loaded(
@@ -602,7 +619,17 @@ def get_knockoffs(
     """
         Interface to name the knockoff method by string
 
-        :param conditional_expectations: Necessary if kwargs['categorical_method'] in ("ranger_scip", "xgb_scip")
+        :param method: Required (no default). 'second_order'/'torch_GAN' also
+            require `categorical_method` in kwargs; 'ranger_SCIP'/'xgb_SCIP'
+            accept `residuals_method` (default 'normal'); 'glm_SCIP' is
+            numeric-only.
+        :param conditional_expectations: Only used when method is
+            'second_order'/'torch_GAN' AND kwargs['categorical_method'] in
+            ("ranger_scip", "xgb_scip"); if None, computed internally (see
+            `get_withCallable`). If given, its columns must be exactly X's
+            numeric columns; they are matched to X by name (any order), and a
+            missing or extra column raises ValueError. Ignored (discarded) for
+            every other combination.
         :param weight: Optional length-n sample weight, forwarded to whichever
             method is selected. None (default) fits unweighted. See each
             get_*'s own docstring for exactly how weight is used
@@ -611,10 +638,6 @@ def get_knockoffs(
             categorical_method's own fit; ranger_SCIP/xgb_SCIP: native
             case.weights/sample_weight).
     """
-    numeric_columns: tuple[ str,... ] = tuple(
-        col for col, dtype in X.schema.items() if dtype != pl.Categorical
-    )
-    
     Xk: pl.DataFrame
     
     if verbose > 0:
@@ -633,10 +656,9 @@ def get_knockoffs(
     
     if method == "second_order":
         # kwargs should have 'categorical_method'
-        if kwargs['categorical_method'] in ( 'ranger_scip', 'xgb_scip' ):
-            assert set( numeric_columns ) == set( conditional_expectations.columns )
-        #
-        else:
+        # conditional_expectations: None -> computed internally; columns are
+        # validated and matched by name in get_withCallable
+        if kwargs['categorical_method'] not in ( 'ranger_scip', 'xgb_scip' ):
             conditional_expectations = None
         #
 
@@ -652,10 +674,9 @@ def get_knockoffs(
     #
     elif method == "torch_GAN":
         # kwargs should have 'categorical_method'
-        if kwargs['categorical_method'] in ( 'ranger_scip', 'xgb_scip' ):
-            assert set( numeric_columns ) == set( conditional_expectations.columns )
-        #
-        else:
+        # conditional_expectations: None -> computed internally; columns are
+        # validated and matched by name in get_withCallable
+        if kwargs['categorical_method'] not in ( 'ranger_scip', 'xgb_scip' ):
             conditional_expectations = None
         #
 
@@ -670,7 +691,8 @@ def get_knockoffs(
         )
     #
     elif method == "ranger_SCIP":
-        # kwargs may have 'residuals_method'
+        # kwargs may have 'residuals_method' (default 'normal', matching get_rangerSCIP)
+        kwargs.setdefault( 'residuals_method', 'normal' )
         assert kwargs['residuals_method'] in ("permute","normal",)
         Xk = get_rangerSCIP(
             X = X,
@@ -682,7 +704,8 @@ def get_knockoffs(
         )
     #
     elif method == "xgb_SCIP":
-        # kwargs may have 'residuals_method'
+        # kwargs may have 'residuals_method' (default 'normal', matching get_xgbSCIP)
+        kwargs.setdefault( 'residuals_method', 'normal' )
         assert kwargs['residuals_method'] in ("permute","normal","zero_inflated",)
         Xk = get_xgbSCIP(
             X = X,

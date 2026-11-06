@@ -119,3 +119,58 @@ def test_unrecognized_method_raises():
     X, rng = _make_mixed(n=10)
     with pytest.raises(ValueError):
         knockoff.get_knockoffs(X, method="not_a_real_method", rng=rng)
+
+
+def test_get_knockoffs_xgb_scip_computes_conditional_expectations_when_omitted():
+    # Regression test: get_knockoffs used to dereference
+    # conditional_expectations.columns unconditionally for
+    # categorical_method in ("ranger_scip", "xgb_scip"), so omitting it
+    # crashed with AttributeError instead of computing it internally.
+    X, rng = _make_mixed()
+    Xk = knockoff.get_knockoffs(
+        X, method="second_order", rng=rng, categorical_method="xgb_scip",
+    )
+    assert Xk.schema == X.schema
+    assert len(Xk) == len(X)
+
+
+def test_get_knockoffs_xgb_SCIP_residuals_method_defaults_to_normal():
+    # Regression test: get_knockoffs used to index kwargs['residuals_method']
+    # directly, so omitting it raised KeyError despite get_xgbSCIP's default.
+    X, _ = _make_mixed()
+    Xk_default = knockoff.get_knockoffs(X, method="xgb_SCIP", rng=np.random.default_rng(3))
+    Xk_normal = knockoff.get_knockoffs(
+        X, method="xgb_SCIP", rng=np.random.default_rng(3), residuals_method="normal",
+    )
+    assert Xk_default.equals(Xk_normal)
+
+
+def test_conditional_expectations_matched_by_column_name():
+    # Regression test: a user-supplied conditional_expectations frame with the
+    # right names in a different order used to be applied positionally, putting
+    # each numeric knockoff in the wrong column. It is now matched by name.
+    from heteroknockoffpy import xgbScip
+
+    X, _ = _make_mixed()
+    ce = xgbScip.get_forest_conditional_expectations(X, rng=np.random.default_rng(5))
+    Xk_ordered = knockoff.get_second_order(
+        X, rng=np.random.default_rng(2), categorical_method="xgb_scip",
+        conditional_expectations=ce,
+    )
+    Xk_reversed = knockoff.get_second_order(
+        X, rng=np.random.default_rng(2), categorical_method="xgb_scip",
+        conditional_expectations=ce.select(list(reversed(ce.columns))),
+    )
+    assert Xk_ordered.equals(Xk_reversed)
+
+
+@pytest.mark.parametrize("bad", ["missing", "extra"])
+def test_conditional_expectations_wrong_columns_raise(bad):
+    X, rng = _make_mixed()
+    ce = pl.DataFrame({"x0": X["x0"], "x1": X["x1"]})
+    ce = ce.drop("x1") if bad == "missing" else ce.with_columns(pl.col("x0").alias("zz"))
+    with pytest.raises(ValueError, match="matched by name"):
+        knockoff.get_knockoffs(
+            X, method="second_order", rng=rng, categorical_method="xgb_scip",
+            conditional_expectations=ce,
+        )
